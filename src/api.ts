@@ -18,6 +18,7 @@ export interface Film {
   isFestivalWinner: boolean;
   isFeatured: boolean;
   tags: string[];
+  watchProgress?: number | null;
   creatorId?: number;
   creatorName?: string | null;
   cast?: string | null;

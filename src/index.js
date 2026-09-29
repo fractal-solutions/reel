@@ -2,7 +2,6 @@ import { createDatabase, initializeDatabase } from "./data";
 import { createApiHandler, uploadedFileResponse } from "./server";
 import index from "./index.html";
 
-// No authentication exists yet; viewer and creator requests use the seeded demo identity (user ID 1).
 const database = createDatabase();
 await initializeDatabase(database);
 const api = createApiHandler(database);

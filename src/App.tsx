@@ -2,14 +2,19 @@ import { createContext, useContext, useEffect, useRef, useState, type AnchorHTML
 import {
   ArrowLeft, ArrowRight, ArrowUpRight, Award, BarChart3, Bookmark,
   Check, ChevronLeft, ChevronRight, CircleDollarSign, Clapperboard, Clock3, Compass,
-  Film as FilmIcon, Globe2, House, LayoutDashboard, LoaderCircle, Menu, MessageCircle,
-  Play, Plus, Search, Send, Share2, Star, Ticket, TrendingUp, Trophy, Upload, Wallet, X, Eye,
+  Film as FilmIcon, FastForward, Globe2, House, LayoutDashboard, LoaderCircle, Maximize, Menu, MessageCircle,
+  Pause, Play, Plus, Rewind, Search, Send, Settings2, Share2, Star, Ticket, TrendingUp, Trophy, Upload, Volume2,
+  VolumeX, Wallet, X, Eye, Users, ShieldCheck, CreditCard, ClipboardList, LogOut, Activity,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { api, formatDuration, type Category, type Film, type FilmList, type Plan, type ProgressItem, type Review } from "./api";
 import "./index.css";
 
 type Router = { path: string; navigate: (to: string) => void };
 const RouterContext = createContext<Router>({ path: "/", navigate: () => undefined });
+type AccountUser = { id: number; name: string; email: string; role: "audience" | "creator" | "admin"; status: string; isDemo: boolean };
+type AuthState = { user: AccountUser | null; loading: boolean; refresh: () => Promise<void>; signOut: () => Promise<void> };
+const AuthContext = createContext<AuthState>({ user: null, loading: true, refresh: async () => undefined, signOut: async () => undefined });
 
 function Link({ href, children, className, ...props }: { href: string; children: ReactNode; className?: string } & AnchorHTMLAttributes<HTMLAnchorElement>) {
   const { navigate } = useContext(RouterContext);
@@ -54,8 +59,34 @@ function useRouter() {
   return useContext(RouterContext);
 }
 
+function RequireAccount({ children }: { children: ReactNode }) {
+  const { user, loading } = useContext(AuthContext);
+  if (loading) return <PageFrame><Loading label="Checking your account…" /></PageFrame>;
+  if (!user) return <PageFrame><EmptyState title="Sign in to continue" message="Sign in or create an account to access your personal library." href="/account" action="Sign in or create account" /></PageFrame>;
+  return children;
+}
+
+function RequireRole({ role, children }: { role: "creator"; children: ReactNode }) {
+  const { user, loading } = useContext(AuthContext);
+  if (loading) return <PageFrame><Loading label="Checking your account…" /></PageFrame>;
+  if (!user) return <PageFrame><EmptyState title="Creator account required" message="Sign in with a creator account or create one to open Creator Studio." href="/account" action="Create or sign in" /></PageFrame>;
+  if (user.role !== role) return <PageFrame><EmptyState title="Creator account required" message="This area is only available to creator accounts." href="/account" action="View your account" /></PageFrame>;
+  return children;
+}
+
 export function App() {
   const [path, setPath] = useState(() => `${window.location.pathname}${window.location.search}`);
+  const [user, setUser] = useState<AccountUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const refreshAuth = async () => {
+    const result = await api<{ user: AccountUser | null }>("auth/me");
+    setUser(result.user);
+    setAuthLoading(false);
+  };
+  const signOut = async () => {
+    await api("auth/logout", { method: "POST" });
+    setUser(null);
+  };
   const navigate = (to: string) => {
     if (to === path) return;
     window.history.pushState({}, "", to);
@@ -67,32 +98,43 @@ export function App() {
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
+  useEffect(() => {
+    void refreshAuth().catch(() => setAuthLoading(false));
+  }, []);
   const route = path.split("?")[0] || "/";
   let page: ReactNode;
   if (route === "/") page = <Home />;
   else if (route === "/browse") page = <Browse />;
   else if (route.startsWith("/film/")) page = <FilmDetail id={route.split("/")[2] || ""} />;
-  else if (route === "/watchlist") page = <WatchlistPage />;
-  else if (route === "/continue-watching") page = <ContinuePage />;
+  else if (route === "/watchlist") page = <RequireAccount><WatchlistPage /></RequireAccount>;
+  else if (route === "/continue-watching") page = <RequireAccount><ContinuePage /></RequireAccount>;
   else if (route === "/plans") page = <PlansPage />;
   else if (route === "/reel") page = <ReelPage />;
-  else if (route === "/creator" || route === "/creator/") page = <CreatorDashboard />;
-  else if (route === "/creator/films") page = <CreatorFilms />;
-  else if (route === "/creator/upload") page = <UploadFilm />;
-  else if (route === "/creator/analytics") page = <CreatorAnalytics />;
-  else if (route === "/creator/earnings") page = <CreatorEarnings />;
+  else if (route === "/account") page = <AccountPage />;
+  else if (route === "/admin") page = <AdminDashboard />;
+  else if (route === "/creator" || route === "/creator/") page = <RequireRole role="creator"><CreatorDashboard /></RequireRole>;
+  else if (route === "/creator/films") page = <RequireRole role="creator"><CreatorFilms /></RequireRole>;
+  else if (route === "/creator/upload") page = <RequireRole role="creator"><UploadFilm /></RequireRole>;
+  else if (route === "/creator/analytics") page = <RequireRole role="creator"><CreatorAnalytics /></RequireRole>;
+  else if (route === "/creator/earnings") page = <RequireRole role="creator"><CreatorEarnings /></RequireRole>;
   else page = <NotFound />;
 
   return <RouterContext.Provider value={{ path, navigate }}>
+    <AuthContext.Provider value={{ user, loading: authLoading, refresh: refreshAuth, signOut }}>
     <div className="app-shell"><Header />{page}<Footer /></div>
+    </AuthContext.Provider>
   </RouterContext.Provider>;
 }
 
 function Header() {
   const { path } = useRouter();
+  const { user, signOut } = useContext(AuthContext);
   const [menuOpen, setMenuOpen] = useState(false);
   const creator = path.startsWith("/creator");
-  const nav = creator
+  const admin = path.startsWith("/admin");
+  const nav = admin
+    ? [{ to: "/admin", label: "Admin", icon: ShieldCheck }]
+    : creator
     ? [{ to: "/creator", label: "Overview", icon: LayoutDashboard }, { to: "/creator/films", label: "My films", icon: Clapperboard }, { to: "/creator/analytics", label: "Analytics", icon: BarChart3 }, { to: "/creator/earnings", label: "Earnings", icon: Wallet }]
     : [{ to: "/", label: "Home", icon: House }, { to: "/browse", label: "Explore", icon: Compass }, { to: "/reel", label: "The Reel", icon: FilmIcon }, { to: "/watchlist", label: "Watchlist", icon: Bookmark }];
   return <header className="site-header">
@@ -102,8 +144,11 @@ function Header() {
         {nav.map(({ to, label, icon: Icon }) => <Link key={to} href={to} className={`nav-link ${path.split("?")[0] === to ? "active" : ""}`} onClick={() => setMenuOpen(false)}><Icon size={16} />{label}</Link>)}
       </nav>
       <div className="nav-actions">
-        {!creator && <Link href="/plans" className="button button-outline button-small"><Ticket size={15} /> Membership</Link>}
-        <Link href={creator ? "/" : "/creator"} className="studio-link">{creator ? "Exit Studio" : "Creator studio"}<ArrowUpRight size={15} /></Link>
+        {!creator && !admin && <Link href="/plans" className="button button-outline button-small"><Ticket size={15} /> Membership</Link>}
+        {!admin && user?.role === "creator" && <Link href={creator ? "/" : "/creator"} className="studio-link">{creator ? "Exit Studio" : "Creator studio"}<ArrowUpRight size={15} /></Link>}
+        {user?.role === "admin" && <Link href="/admin" className="studio-link"><ShieldCheck size={15} />Admin</Link>}
+        <Link href="/account" className="studio-link">{user ? user.name : "Sign in"}</Link>
+        {user && <button className="studio-link header-signout" onClick={() => void signOut()} aria-label="Sign out"><LogOut size={15} /></button>}
         <button className="icon-button menu-toggle" onClick={() => setMenuOpen((open) => !open)} aria-label="Toggle navigation">{menuOpen ? <X size={20} /> : <Menu size={20} />}</button>
       </div>
     </div>
@@ -114,8 +159,8 @@ function Footer() {
   return <footer className="site-footer"><Link href="/" className="brand"><span className="brand-mark"><FilmIcon size={17} /></span><span>Filamu<span className="brand-accent">Reel</span></span></Link><p>A home for stories born across Africa.</p><span className="footer-copy">© {new Date().getFullYear()} FilamuReel</span></footer>;
 }
 
-function PageFrame({ children, wide = false }: { children: ReactNode; wide?: boolean }) {
-  return <main className={`page-content ${wide ? "wide" : ""}`}>{children}</main>;
+function PageFrame({ children, wide = false, className = "" }: { children: ReactNode; wide?: boolean; className?: string }) {
+  return <main className={`page-content ${wide ? "wide" : ""} ${className}`}>{children}</main>;
 }
 
 function SectionHeading({ eyebrow, title, description, action }: { eyebrow?: string; title: string; description?: string; action?: ReactNode }) {
@@ -164,6 +209,7 @@ function FilmRail({ title, eyebrow, films }: { title: string; eyebrow?: string; 
 }
 
 function Home() {
+  const { user } = useContext(AuthContext);
   const featured = useLoad<Film[]>("featured");
   const trending = useLoad<Film[]>("trending?limit=12");
   const newFilms = useLoad<Film[]>("new-releases?limit=12");
@@ -203,7 +249,7 @@ function Home() {
       <FilmRail eyebrow="JUST ARRIVED" title="New releases" films={newFilms.data || []} />
       {free.error && <Notice message={free.error} onRetry={free.reload} />}
       <FilmRail eyebrow="OPEN ACCESS" title="Free to watch" films={free.data || []} />
-      <div className="creator-callout"><div><p className="eyebrow">YOUR STORY BELONGS HERE</p><h2>Make room for a new voice.</h2><p>Bring your film to an audience that values the stories you have to tell.</p><Link href="/creator" className="button button-gold">Enter creator studio<ArrowRight size={16} /></Link></div><div className="callout-art"><span>F</span><span>R</span></div></div>
+      <div className="creator-callout"><div><p className="eyebrow">YOUR STORY BELONGS HERE</p><h2>Make room for a new voice.</h2><p>Bring your film to an audience that values the stories you have to tell.</p><Link href={user?.role === "creator" ? "/creator" : "/account"} className="button button-gold">{user?.role === "creator" ? "Enter creator studio" : "Create a creator account"}<ArrowRight size={16} /></Link></div><div className="callout-art"><span>F</span><span>R</span></div></div>
     </PageFrame>
   </>;
 }
@@ -234,22 +280,398 @@ function Browse() {
   </PageFrame>;
 }
 
+function playerTime(seconds: number) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = Math.floor(seconds % 60).toString().padStart(2, "0");
+  return hours ? `${hours}:${minutes.toString().padStart(2, "0")}:${remainder}` : `${minutes}:${remainder}`;
+}
+
+function VideoPlayer({ film, initialPosition, onClose, onSaveError }: {
+  film: Film;
+  initialPosition: number;
+  onClose: () => void;
+  onSaveError: (message: string) => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const playerRef = useRef<HTMLDivElement>(null);
+  const viewingEventId = useRef<number | null>(null);
+  const viewingEventRequest = useRef<Promise<number> | null>(null);
+  const progressQueue = useRef<Promise<void>>(Promise.resolve());
+  const pendingPosition = useRef(initialPosition);
+  const lastCheckpoint = useRef(initialPosition);
+  const lastMediaTime = useRef(initialPosition);
+  const watchedSeconds = useRef(0);
+  const continuousPlaySeconds = useRef(0);
+  const hasPlayed = useRef(false);
+  const playingRef = useRef(false);
+  const [loading, setLoading] = useState(true);
+  const [buffering, setBuffering] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(initialPosition);
+  const [duration, setDuration] = useState(film.duration || 0);
+  const [volume, setVolume] = useState(1);
+  const [muted, setMuted] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const [playerError, setPlayerError] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [watchPromptOpen, setWatchPromptOpen] = useState(false);
+  const sourceType = film.videoUrl ? "film" : "trailer";
+  const source = film.videoUrl || film.trailerUrl || undefined;
+
+  const beginViewingEvent = () => {
+    if (viewingEventId.current !== null) return Promise.resolve(viewingEventId.current);
+    if (viewingEventRequest.current) return viewingEventRequest.current;
+    viewingEventRequest.current = api<{ viewingEventId: number }>(`films/${film.id}/view`, {
+      method: "POST",
+      body: JSON.stringify({ mediaType: sourceType }),
+    }).then(({ viewingEventId: id }) => {
+      viewingEventId.current = id;
+      return id;
+    }).finally(() => { viewingEventRequest.current = null; });
+    return viewingEventRequest.current;
+  };
+
+  const saveProgress = (position: number, total: number, keepalive = false, reportError = false) => {
+    const watched = Math.min(30, Math.floor(watchedSeconds.current));
+    watchedSeconds.current = Math.max(0, watchedSeconds.current - watched);
+    const task = progressQueue.current.catch(() => undefined).then(async () => {
+      let eventId = viewingEventId.current;
+      if (hasPlayed.current && eventId === null && !keepalive) {
+        try { eventId = await beginViewingEvent(); }
+        catch { /* Progress is still saved if event tracking is unavailable. */ }
+      }
+      const body = {
+        filmId: film.id,
+        progressSeconds: Math.max(0, Math.floor(position)),
+        totalSeconds: Math.max(0, Math.floor(total)),
+        watchedSecondsDelta: watched,
+        ...(eventId === null ? {} : { viewingEventId: eventId }),
+      };
+      let failure: unknown;
+      for (let attempt = 0; attempt < (keepalive ? 1 : 3); attempt++) {
+        try {
+          await api("progress", { method: "POST", body: JSON.stringify(body), keepalive });
+          setSaveError("");
+          return;
+        } catch (error) {
+          failure = error;
+          if (attempt < 2) await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
+        }
+      }
+      throw failure;
+    });
+    progressQueue.current = task;
+    return task.catch((error: unknown) => {
+      watchedSeconds.current += watched;
+      const message = error instanceof Error ? error.message : "Unable to save viewing progress.";
+      setSaveError(message);
+      if (keepalive || reportError) onSaveError(message);
+    });
+  };
+
+  const closePlayer = async () => {
+    const video = videoRef.current;
+    if (video && hasPlayed.current) {
+      try { await saveProgress(video.currentTime, video.duration || film.duration || 0, false, true); }
+      catch { /* saveProgress reports the error and the player can still close. */ }
+    }
+    onClose();
+  };
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const saveOnExit = () => {
+      if (hasPlayed.current)
+        void saveProgress(video.currentTime, video.duration || film.duration || 0, true);
+    };
+    const saveWhenHidden = () => {
+      if (document.visibilityState === "hidden") saveOnExit();
+    };
+    document.addEventListener("visibilitychange", saveWhenHidden);
+    window.addEventListener("pagehide", saveOnExit);
+    return () => {
+      document.removeEventListener("visibilitychange", saveWhenHidden);
+      window.removeEventListener("pagehide", saveOnExit);
+    };
+  }, [film.duration, film.id]);
+
+  useEffect(() => {
+    const syncFullscreen = () => {
+      const fullscreen = document.fullscreenElement === playerRef.current;
+      setIsFullscreen(fullscreen);
+      setControlsVisible(true);
+    };
+    document.addEventListener("fullscreenchange", syncFullscreen);
+    return () => document.removeEventListener("fullscreenchange", syncFullscreen);
+  }, []);
+
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!player || !isFullscreen || !playing || buffering || loading || playerError || watchPromptOpen) {
+      setControlsVisible(true);
+      return;
+    }
+    let hideTimer = 0;
+    const revealControls = () => {
+      setControlsVisible(true);
+      window.clearTimeout(hideTimer);
+      hideTimer = window.setTimeout(() => setControlsVisible(false), 2500);
+    };
+    player.addEventListener("pointermove", revealControls);
+    player.addEventListener("pointerdown", revealControls);
+    player.addEventListener("keydown", revealControls);
+    hideTimer = window.setTimeout(() => setControlsVisible(false), 2500);
+    return () => {
+      window.clearTimeout(hideTimer);
+      player.removeEventListener("pointermove", revealControls);
+      player.removeEventListener("pointerdown", revealControls);
+      player.removeEventListener("keydown", revealControls);
+    };
+  }, [buffering, isFullscreen, loading, playerError, playing, watchPromptOpen]);
+
+  useEffect(() => {
+    if (!playing || buffering || watchPromptOpen) return;
+    const timer = window.setInterval(() => {
+      continuousPlaySeconds.current += 1;
+      if (continuousPlaySeconds.current >= 3 * 60 * 60) {
+        continuousPlaySeconds.current = 0;
+        setWatchPromptOpen(true);
+        videoRef.current?.pause();
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [buffering, playing, watchPromptOpen]);
+
+  const togglePlayback = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      void video.play().catch((error: unknown) => {
+        setPlayerError(error instanceof Error ? error.message : "Playback could not start.");
+      });
+    } else {
+      video.pause();
+    }
+  };
+
+  const toggleMute = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.muted || video.volume === 0) {
+      if (video.volume === 0) {
+        video.volume = 0.5;
+        setVolume(0.5);
+      }
+      video.muted = false;
+    } else {
+      video.muted = true;
+    }
+    setMuted(video.muted);
+  };
+
+  const seekBy = (seconds: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const end = Number.isFinite(video.duration) ? video.duration : Math.max(0, duration);
+    video.currentTime = Math.max(0, Math.min(end, video.currentTime + seconds));
+    setCurrentTime(video.currentTime);
+    lastMediaTime.current = video.currentTime;
+  };
+
+  const changePlaybackRate = (rate: number) => {
+    setPlaybackRate(rate);
+    if (videoRef.current) videoRef.current.playbackRate = rate;
+    setSettingsOpen(false);
+  };
+
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    } else if (playerRef.current) {
+      void playerRef.current.requestFullscreen();
+    }
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      void closePlayer();
+    } else if (event.key === " " && !(event.target instanceof HTMLButtonElement)) {
+      event.preventDefault();
+      togglePlayback();
+    } else if (event.key.toLowerCase() === "m") {
+      toggleMute();
+    } else if (event.key.toLowerCase() === "f") {
+      toggleFullscreen();
+    }
+  };
+
+  const onTimeUpdate = (video: HTMLVideoElement) => {
+    const now = video.currentTime;
+    const delta = now - lastMediaTime.current;
+    if (playingRef.current && delta > 0 && delta <= 5)
+      watchedSeconds.current += delta;
+    lastMediaTime.current = now;
+    setCurrentTime(now);
+    if (now - lastCheckpoint.current >= 15) {
+      lastCheckpoint.current = now;
+      void saveProgress(now, video.duration || film.duration || 0);
+    }
+  };
+
+  return <div className="modal-backdrop player-backdrop" role="presentation" onClick={(event) => {
+    if (event.target === event.currentTarget) void closePlayer();
+  }}><div className={`video-modal${isFullscreen && playing && !controlsVisible && !buffering && !loading && !playerError && !watchPromptOpen ? " controls-hidden" : ""}`} ref={playerRef} role="dialog" aria-modal="true" aria-label={`Watch ${film.title}`} tabIndex={-1} onKeyDown={handleKeyDown}>
+    <div className="player-heading player-chrome">
+      <div><span className="player-brand-mark"><FilmIcon size={17} /></span><span><strong>Filamu<span>Reel</span></strong><small>{film.title}</small></span></div>
+      <button className="player-close" autoFocus onClick={() => void closePlayer()} aria-label="Close player"><X size={20} /></button>
+    </div>
+    <div className="player-stage">
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        preload="auto"
+        poster={film.posterUrl || undefined}
+        src={source}
+        aria-label={film.title}
+        onClick={() => {
+          if (!loading && !buffering && !playerError) togglePlayback();
+        }}
+        onLoadedMetadata={(event) => {
+          const video = event.currentTarget;
+          const actualDuration = Number.isFinite(video.duration) ? video.duration : film.duration || 0;
+          setDuration(actualDuration);
+          const startAt = Math.min(pendingPosition.current, Math.max(0, actualDuration - 1));
+          video.currentTime = startAt;
+          setCurrentTime(startAt);
+          lastCheckpoint.current = startAt;
+          lastMediaTime.current = startAt;
+        }}
+        onCanPlay={() => { setLoading(false); setBuffering(false); }}
+        onWaiting={() => { setLoading(false); setBuffering(true); }}
+        onPlaying={() => {
+          setLoading(false);
+          setBuffering(false);
+          setPlayerError("");
+          setPlaying(true);
+          playingRef.current = true;
+          hasPlayed.current = true;
+          lastMediaTime.current = videoRef.current?.currentTime || 0;
+          void beginViewingEvent().catch((error: unknown) => {
+            setSaveError(error instanceof Error ? error.message : "Unable to record this playback.");
+          });
+        }}
+        onPause={(event) => {
+          setPlaying(false);
+          playingRef.current = false;
+          if (!watchPromptOpen) continuousPlaySeconds.current = 0;
+          if (hasPlayed.current)
+            void saveProgress(event.currentTarget.currentTime, event.currentTarget.duration || film.duration || 0);
+        }}
+        onTimeUpdate={(event) => onTimeUpdate(event.currentTarget)}
+        onSeeking={(event) => { lastMediaTime.current = event.currentTarget.currentTime; }}
+        onSeeked={(event) => { lastMediaTime.current = event.currentTarget.currentTime; }}
+        onEnded={(event) => {
+          setPlaying(false);
+          playingRef.current = false;
+          const video = event.currentTarget;
+          lastCheckpoint.current = video.currentTime;
+          void saveProgress(video.currentTime, video.duration || film.duration || 0);
+        }}
+        onError={() => {
+          setLoading(false);
+          setBuffering(false);
+          setPlayerError("This video could not be loaded. Check your connection and try again.");
+        }}
+      />
+      {(loading || buffering) && <div className="player-loading" role="status" aria-live="polite">
+        <span className="player-loader-mark"><FilmIcon size={25} /></span>
+        <strong>Filamu<span>Reel</span></strong>
+        <small>{buffering ? "Buffering film…" : "Loading film…"}</small>
+      </div>}
+      {playerError && <div className="player-error" role="alert"><p>{playerError}</p><button className="button button-outline button-small" onClick={() => { setPlayerError(""); setLoading(true); videoRef.current?.load(); }}>Try again</button></div>}
+      {!playing && !loading && !buffering && !playerError && <button className="player-center-play" onClick={togglePlayback} aria-label="Play"><Play size={28} fill="currentColor" /></button>}
+    </div>
+    <div className="player-controls player-chrome">
+      {saveError && <div className="player-save-error" role="status">{saveError}<button onClick={() => { const video = videoRef.current; if (video) void saveProgress(video.currentTime, video.duration || film.duration || 0); }}>Retry save</button></div>}
+      <div className="player-timeline">
+        <input aria-label="Seek film" type="range" min="0" max={duration || 0} step="1" value={Math.min(currentTime, duration || 0)} style={{ "--player-progress": `${duration ? currentTime / duration * 100 : 0}%` } as React.CSSProperties} onChange={(event) => {
+          const video = videoRef.current;
+          if (!video) return;
+          video.currentTime = Number(event.target.value);
+          setCurrentTime(video.currentTime);
+          lastMediaTime.current = video.currentTime;
+        }} />
+      </div>
+      <div className="player-control-row">
+        <div className="player-control-group">
+          <button className="player-control-button" onClick={togglePlayback} aria-label={playing ? "Pause film" : "Play film"}>{playing ? <Pause size={19} fill="currentColor" /> : <Play size={19} fill="currentColor" />}</button>
+          <button className="player-control-button" onClick={() => seekBy(-10)} aria-label="Rewind 10 seconds" title="Rewind 10 seconds"><Rewind size={17} /><small>10</small></button>
+          <button className="player-control-button" onClick={() => seekBy(10)} aria-label="Forward 10 seconds" title="Forward 10 seconds"><FastForward size={17} /><small>10</small></button>
+          <span className="player-clock">{playerTime(currentTime)} <i>/</i> {playerTime(duration)}</span>
+        </div>
+        <div className="player-control-group">
+          <button className="player-control-button" onClick={toggleMute} aria-label={muted ? "Unmute" : "Mute"}>{muted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>
+          <input className="player-volume" aria-label="Volume" type="range" min="0" max="1" step=".05" value={muted ? 0 : volume} style={{ "--volume-level": `${muted ? 0 : volume * 100}%` } as React.CSSProperties} onChange={(event) => {
+            const nextVolume = Number(event.target.value);
+            setVolume(nextVolume);
+            setMuted(nextVolume === 0);
+            if (videoRef.current) {
+              videoRef.current.volume = nextVolume;
+              videoRef.current.muted = nextVolume === 0;
+            }
+          }} />
+          <div className="player-settings">
+            <button className="player-control-button" onClick={() => setSettingsOpen((open) => !open)} aria-label="Playback settings" aria-expanded={settingsOpen} aria-haspopup="menu" title="Playback settings"><Settings2 size={18} /></button>
+            {settingsOpen && <div className="player-settings-menu" role="menu" aria-label="Playback speed">
+              <strong>Playback speed</strong>
+              {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => <button key={rate} role="menuitemradio" aria-checked={playbackRate === rate} className={playbackRate === rate ? "selected" : ""} onClick={() => changePlaybackRate(rate)}>{rate === 1 ? "Normal" : `${rate}×`}</button>)}
+            </div>}
+          </div>
+          <button className="player-control-button" onClick={toggleFullscreen} aria-label="Toggle fullscreen"><Maximize size={18} /></button>
+        </div>
+      </div>
+    </div>
+    {watchPromptOpen && <div className="player-attention-backdrop"><section className="player-attention-dialog" role="alertdialog" aria-modal="true" aria-labelledby="watch-prompt-title" aria-describedby="watch-prompt-description">
+      <span className="player-brand-mark"><FilmIcon size={20} /></span><p className="eyebrow">A MOMENT FOR THE AUDIENCE</p><h2 id="watch-prompt-title">Are you still watching?</h2>
+      <p id="watch-prompt-description">Playback paused after three hours. Take a break or pick up where you left off.</p>
+      <div className="resume-actions">
+        <button className="button button-gold" autoFocus onClick={() => {
+          continuousPlaySeconds.current = 0;
+          setWatchPromptOpen(false);
+          togglePlayback();
+        }}><Play size={15} fill="currentColor" />Continue watching</button>
+        <button className="button button-glass" onClick={() => void closePlayer()}>Close player</button>
+      </div>
+    </section></div>}
+  </div></div>;
+}
+
 function FilmDetail({ id }: { id: string }) {
+  const { user } = useContext(AuthContext);
+  const { navigate } = useRouter();
   const filmId = Number(id);
   const filmState = useLoad<Film>(Number.isInteger(filmId) ? `films/${filmId}` : null);
   const related = useLoad<Film[]>(Number.isInteger(filmId) ? `films/${filmId}/related` : null);
   const reviewsState = useLoad<Review[]>(Number.isInteger(filmId) ? `films/${filmId}/reviews` : null);
   const [mutationError, setMutationError] = useState("");
   const [videoOpen, setVideoOpen] = useState(false);
+  const [resumePromptOpen, setResumePromptOpen] = useState(false);
+  const [initialPosition, setInitialPosition] = useState(0);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
-  const lastProgressCheckpoint = useRef(0);
-  const [viewingEventId, setViewingEventId] = useState<number | null>(null);
-  const { navigate } = useRouter();
   const film = filmState.data;
   const toggleWatchlist = async () => {
+    if (!user) { navigate("/account"); return; }
     if (!film) return;
     setBusy(true); setMutationError("");
     try {
@@ -263,41 +685,49 @@ function FilmDetail({ id }: { id: string }) {
   };
   const submitReview = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true); setMutationError("");
+    if (!user) { navigate("/account"); setBusy(false); return; }
     try {
       await api(`films/${filmId}/reviews`, { method: "POST", body: JSON.stringify({ rating, comment }) });
       setComment(""); setReviewOpen(false); reviewsState.reload(); filmState.reload();
     } catch (error) { setMutationError(error instanceof Error ? error.message : "Unable to submit review."); }
     finally { setBusy(false); }
   };
-  const recordProgress = async (current: number, total: number) => {
-    try {
-      await api("progress", {
-        method: "POST",
-        body: JSON.stringify({
-          filmId,
-          progressSeconds: Math.floor(current),
-          totalSeconds: Math.floor(total),
-          ...(viewingEventId === null ? {} : { viewingEventId }),
-        }),
-      });
-    }
-    catch (error) { setMutationError(error instanceof Error ? error.message : "Unable to save viewing progress."); }
-  };
   const startPlayback = async () => {
+    if (!user) { navigate("/account"); return; }
     if (!film) return;
     if (!film.videoUrl && !film.trailerUrl) {
       setMutationError("A video has not been uploaded or linked for this film yet.");
       return;
     }
+    const position = film.watchProgress || 0;
+    const total = film.duration || 0;
+    if (position >= 10 && (!total || position / total < 0.95)) {
+      setResumePromptOpen(true);
+    } else {
+      void selectPlaybackPosition(false);
+    }
+  };
+  const selectPlaybackPosition = async (resume: boolean) => {
+    if (!film) return;
     setBusy(true);
     setMutationError("");
     try {
-      const session = await api<{ viewingEventId: number }>(`films/${film.id}/view`, { method: "POST" });
-      setViewingEventId(session.viewingEventId);
-      lastProgressCheckpoint.current = 0;
+      const position = resume ? film.watchProgress || 0 : 0;
+      if (!resume && (film.watchProgress || 0) > 0) {
+        await api("progress", {
+          method: "POST",
+          body: JSON.stringify({
+            filmId: film.id,
+            progressSeconds: 0,
+            totalSeconds: film.duration || 0,
+          }),
+        });
+      }
+      setInitialPosition(position);
+      setResumePromptOpen(false);
       setVideoOpen(true);
     } catch (error) {
-      setMutationError(error instanceof Error ? error.message : "Unable to start film playback.");
+      setMutationError(error instanceof Error ? error.message : "Unable to reset viewing progress.");
     } finally {
       setBusy(false);
     }
@@ -314,7 +744,7 @@ function FilmDetail({ id }: { id: string }) {
         <div className="detail-copy">{film.isFestivalWinner && <p className="eyebrow gold-text"><Award size={15} /> FESTIVAL LAUREATE</p>}<h1>{film.title}</h1>
           <div className="detail-facts"><span><Star size={14} fill="currentColor" />{film.rating ? film.rating.toFixed(1) : "New"}</span><span>{new Date(film.createdAt).getFullYear()}</span><span>{formatDuration(film.duration)}</span><span>{film.category || film.genre}</span>{film.region && <span>{film.region}</span>}</div>
           <p className="detail-description">{film.description || "A story from the heart of the continent."}</p>
-          <div className="hero-actions"><button className="button button-gold" onClick={() => void startPlayback()} disabled={busy}><Play size={16} fill="currentColor" />Play film</button>
+          <div className="hero-actions"><button className="button button-gold" onClick={() => void startPlayback()} disabled={busy}><Play size={16} fill="currentColor" />{film.watchProgress && film.watchProgress >= 10 && (!film.duration || film.watchProgress / film.duration < 0.95) ? "Resume film" : film.watchProgress && film.watchProgress >= 10 ? "Watch again" : "Play film"}</button>
             <button className="button button-glass" onClick={toggleWatchlist} disabled={busy}>{film.isInWatchlist ? <Check size={16} /> : <Plus size={16} />}{film.isInWatchlist ? "Saved to watchlist" : "Add to watchlist"}</button>
             <button className="icon-button share-button" onClick={() => navigator.clipboard.writeText(location.href).then(() => setMutationError("Link copied to clipboard.")).catch(() => setMutationError("Unable to copy link in this browser."))} aria-label="Copy film link"><Share2 size={17} /></button>
           </div>
@@ -324,7 +754,7 @@ function FilmDetail({ id }: { id: string }) {
     <PageFrame wide><div className="detail-columns"><div>
       <div className="detail-info">{film.director && <div><span>Directed by</span><strong>{film.director}</strong></div>}{film.language && <div><span>Language</span><strong>{film.language}</strong></div>}{film.cast && <div className="cast-row"><span>Featuring</span><strong>{film.cast}</strong></div>}{film.creatorName && <div><span>Presented by</span><strong>{film.creatorName}</strong></div>}</div>
       {film.tags?.length > 0 && <div className="film-tags">{film.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
-      <div className="reviews-section"><SectionHeading eyebrow="FROM THE AUDIENCE" title="Reviews" action={<button className="text-button" onClick={() => setReviewOpen((open) => !open)}><MessageCircle size={15} />Write a review</button>} />
+      <div className="reviews-section"><SectionHeading eyebrow="FROM THE AUDIENCE" title="Reviews" action={<button className="text-button" onClick={() => user ? setReviewOpen((open) => !open) : navigate("/account")}><MessageCircle size={15} />{user ? "Write a review" : "Sign in to review"}</button>} />
         {reviewOpen && <form className="review-form" onSubmit={submitReview}><label>Your rating <select value={rating} onChange={(e) => setRating(Number(e.target.value))}>{[5,4,3,2,1].map((value) => <option value={value} key={value}>{value} stars</option>)}</select></label><textarea value={comment} onChange={(e) => setComment(e.target.value)} placeholder="What stayed with you?" rows={3} /><button className="button button-gold" disabled={busy}><Send size={15} />Submit review</button></form>}
         {reviewsState.error && <Notice message={reviewsState.error} onRetry={reviewsState.reload} />}
         {reviewsState.loading ? <Loading label="Loading reviews…" /> : reviewsState.data?.length ? <div className="review-list">{reviewsState.data.map((review) => <article className="review-card" key={review.id}><div className="review-heading"><div className="avatar">{review.userName?.[0] || "F"}</div><div><strong>{review.userName || "Film lover"}</strong><small>{new Date(review.createdAt).toLocaleDateString()}</small></div><span className="review-rating"><Star size={13} fill="currentColor" />{review.rating}.0</span></div>{review.comment && <p>{review.comment}</p>}</article>)}</div> : <p className="muted review-empty">Be the first to share what you thought of this film.</p>}
@@ -332,7 +762,14 @@ function FilmDetail({ id }: { id: string }) {
     </div><aside className="detail-aside"><div className="membership-card"><CrownIcon /><p className="eyebrow">THE PREMIERE COLLECTION</p><h3>More cinema.<br />Fewer interruptions.</h3><p>Support filmmakers and unlock the complete collection with a membership.</p><Link href="/plans" className="button button-gold button-block">Explore membership<ArrowRight size={15} /></Link></div></aside></div>
       {related.error && <Notice message={related.error} onRetry={related.reload} />}<FilmRail eyebrow="KEEP EXPLORING" title="More like this" films={related.data || []} />
     </PageFrame>
-    {videoOpen && <div className="modal-backdrop" role="presentation" onClick={() => setVideoOpen(false)}><div className="video-modal" role="dialog" aria-modal="true" aria-label={`Play ${film.title}`} onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setVideoOpen(false)} aria-label="Close player"><X size={21} /></button><video controls autoPlay src={film.videoUrl || film.trailerUrl || undefined} onTimeUpdate={(event) => { const v = event.currentTarget; if (v.currentTime - lastProgressCheckpoint.current >= 15) { lastProgressCheckpoint.current = v.currentTime; void recordProgress(v.currentTime, v.duration || film.duration || 0); } }} onEnded={(event) => { const v = event.currentTarget; void recordProgress(v.currentTime, v.duration || film.duration || 0); }} /></div></div>}
+    {resumePromptOpen && <div className="modal-backdrop resume-backdrop" role="presentation"><section className="resume-dialog" role="dialog" aria-modal="true" aria-labelledby="resume-title" tabIndex={-1} onKeyDown={(event) => {
+      if (event.key === "Escape") setResumePromptOpen(false);
+    }}>
+      <span className="player-brand-mark"><FilmIcon size={20} /></span><p className="eyebrow">YOUR PLACE IS SAVED</p><h2 id="resume-title">Pick up where you left off?</h2>
+      <p className="muted">You watched {formatDuration(film.watchProgress)} of {formatDuration(film.duration)}.</p>
+      <div className="resume-actions"><button className="button button-gold" onClick={() => void selectPlaybackPosition(true)} disabled={busy}><Play size={15} fill="currentColor" />Resume</button><button className="button button-glass" onClick={() => void selectPlaybackPosition(false)} disabled={busy}>Start over</button><button className="text-button" onClick={() => setResumePromptOpen(false)} disabled={busy}>Cancel</button></div>
+    </section></div>}
+    {videoOpen && <VideoPlayer film={film} initialPosition={initialPosition} onClose={() => { setVideoOpen(false); filmState.reload(); }} onSaveError={setMutationError} />}
     {mutationError && <div className="toast-message" role="status">{mutationError}<button onClick={() => setMutationError("")} aria-label="Dismiss"><X size={14} /></button></div>}
   </>;
 }
@@ -356,17 +793,251 @@ function ContinuePage() {
 
 function PlansPage() {
   const plansState = useLoad<Plan[]>("plans");
-  const plans = plansState.data?.length ? plansState.data : [
-    { id: 1, name: "Standard", priceMonthly: 599, features: ["Access to the ad-supported catalogue", "HD streaming", "Watch on 1 device"] },
-    { id: 2, name: "Premiere", priceMonthly: 999, features: ["Full premium collection", "Ad-free viewing", "Watch on 4 devices", "Support African filmmakers"] },
-  ];
+  const plans = plansState.data || [];
   const [message, setMessage] = useState("");
   return <PageFrame><section className="page-hero compact centered"><p className="eyebrow">A LITTLE MORE CINEMA</p><h1>Choose your<br /><em>premiere.</em></h1><p>Discover more of the stories you love, while giving creators more room to tell them.</p></section>
     {plansState.error && <Notice message={plansState.error} onRetry={plansState.reload} />}
-    <div className="plan-grid">{plans.map((plan, index) => <article className={`plan-card ${index === 1 ? "featured-plan" : ""}`} key={plan.id}>{index === 1 && <span className="plan-ribbon">MOST LOVED</span>}<span className="plan-icon">{index === 1 ? <Award size={22} /> : <FilmIcon size={22} />}</span><h2>{plan.name}</h2><p className="plan-price"><small>KES</small> {plan.priceMonthly.toLocaleString()}<span>/ month</span></p><ul>{plan.features.map((feature) => <li key={feature}><Check size={15} />{feature}</li>)}</ul><button className={`button ${index === 1 ? "button-gold" : "button-glass"} button-block`} onClick={() => setMessage("Membership checkout isn't connected yet. Your plan selection has not been charged.")}>Choose {plan.name}<ArrowRight size={15} /></button></article>)}</div>
+    {plansState.loading ? <Loading label="Loading available plans…" /> : plans.length ? <div className="plan-grid">{plans.map((plan, index) => <article className={`plan-card ${index === 1 ? "featured-plan" : ""}`} key={plan.id}>{index === 1 && <span className="plan-ribbon">MOST LOVED</span>}<span className="plan-icon">{index === 1 ? <Award size={22} /> : <FilmIcon size={22} />}</span><h2>{plan.name}</h2><p className="plan-price"><small>KES</small> {plan.priceMonthly.toLocaleString()}<span>/ month</span></p><ul>{plan.features.map((feature) => <li key={feature}><Check size={15} />{feature}</li>)}</ul><button className={`button ${index === 1 ? "button-gold" : "button-glass"} button-block`} onClick={() => setMessage("Membership checkout is not connected. You have not been charged.")}>Choose {plan.name}<ArrowRight size={15} /></button></article>)}</div> : <EmptyState title="No membership plans yet" message="There are no plans available right now." />}
     <p className="fine-print">Plans are shown for preview. Payments and subscription management are not connected yet.</p>
     {message && <div className="toast-message" role="status">{message}<button onClick={() => setMessage("")}><X size={14} /></button></div>}
   </PageFrame>;
+}
+
+function AccountPage() {
+  const { user, loading, refresh, signOut } = useContext(AuthContext);
+  const { navigate } = useRouter();
+  const [registering, setRegistering] = useState(false);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const subscription = useLoad<Record<string, unknown>>(user ? "account/subscription" : null);
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError("");
+    setBusy(true);
+    const form = new FormData(event.currentTarget);
+    const payload = {
+      name: String(form.get("name") || ""),
+      email: String(form.get("email") || ""),
+      password: String(form.get("password") || ""),
+      role: String(form.get("role") || "audience"),
+    };
+    try {
+      await api(registering ? "auth/register" : "auth/login", {
+        method: "POST",
+        body: JSON.stringify(registering ? payload : { email: payload.email, password: payload.password }),
+      });
+      await refresh();
+      navigate("/");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to access your account.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (loading) return <PageFrame><Loading label="Checking your account…" /></PageFrame>;
+  if (user) return <PageFrame><PageTitle eyebrow="YOUR ACCOUNT" title={`Welcome, ${user.name.split(" ")[0]}.`} description={user.email} />
+    <div className="account-card panel"><p className="eyebrow">ACCOUNT TYPE</p><h2>{user.role === "audience" ? "Audience member" : user.role === "creator" ? "Creator account" : "Administrator"}</h2><p>{user.isDemo ? "Demo account — activity is excluded from real platform analytics." : "Your account is active."}</p>
+      {user.role === "creator" && <Link className="button button-outline" href="/creator">Open Creator Studio<ArrowRight size={15} /></Link>}
+      {user.role === "admin" && <Link className="button button-outline" href="/admin">Open admin dashboard<ArrowRight size={15} /></Link>}
+      {user.role === "audience" && <section className="account-subscription"><p className="eyebrow">SUBSCRIPTION</p>{subscription.loading ? <Loading label="Checking subscription…" /> : subscription.error ? <Notice message={subscription.error} onRetry={subscription.reload} /> : subscription.data ? <p>{String(subscription.data.planName)} · {String(subscription.data.status)}</p> : <p className="muted">No active subscription. Payments are not connected yet.</p>}</section>}
+      <button className="button button-glass" onClick={() => void signOut().then(() => navigate("/")).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Unable to sign out."))}><LogOut size={15} />Sign out</button>
+      {error && <Notice message={error} />}
+    </div>
+  </PageFrame>;
+  return <PageFrame className="account-access-page"><div className={`account-access-content ${registering ? "registering" : ""}`}>
+    <section className="page-hero compact centered"><p className="eyebrow">FILAMUREEL ACCOUNT</p><h1>Your stories. <em>Your place.</em></h1><p>Sign in or create an account to continue.</p></section>
+    <form className="account-form panel" onSubmit={(event) => void submit(event)}>
+      <div className="account-form-tabs" role="group" aria-label="Account access options">
+        <button type="button" aria-pressed={!registering} className={!registering ? "selected" : ""} onClick={() => { setRegistering(false); setError(""); }}>Sign in</button>
+        <button type="button" aria-pressed={registering} className={registering ? "selected" : ""} onClick={() => { setRegistering(true); setError(""); }}>Create account</button>
+      </div>
+      {registering && <label className="form-field"><span>Name</span><input name="name" autoComplete="name" required maxLength={100} /></label>}
+      <label className="form-field"><span>Email</span><input name="email" type="email" autoComplete="email" required maxLength={254} /></label>
+      <label className="form-field"><span>Password (at least 12 characters)</span><input name="password" type="password" autoComplete={registering ? "new-password" : "current-password"} minLength={registering ? 12 : undefined} maxLength={128} required /></label>
+      {registering && <label className="form-field"><span>Account type</span><select name="role"><option value="audience">Audience</option><option value="creator">Creator</option></select></label>}
+      {error && <Notice message={error} />}
+      <button className="button button-gold button-block" disabled={busy}>{busy ? "Please wait…" : registering ? "Create account" : "Sign in"}<ArrowRight size={15} /></button>
+      {registering && <p className="account-hint">Creator accounts can publish films. Uploads and publishing are subject to platform review.</p>}
+    </form>
+  </div></PageFrame>;
+}
+
+type AdminSection = "overview" | "users" | "films" | "reviews" | "subscriptions" | "transactions" | "plans" | "audit";
+function AdminDashboard() {
+  const { user, loading: authLoading } = useContext(AuthContext);
+  const [section, setSection] = useState<AdminSection>("overview");
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [search, setSearch] = useState("");
+  const searchQuery = new URLSearchParams({ search }).toString();
+  const endpoint = section === "overview" ? "admin/overview"
+    : section === "users" ? `admin/users?${searchQuery}`
+      : section === "films" ? "admin/films"
+      : section === "reviews" ? "admin/reviews"
+        : section === "subscriptions" ? "admin/subscriptions"
+          : section === "transactions" ? "admin/transactions"
+            : section === "plans" ? "admin/plans" : "admin/audit";
+  const state = useLoad<unknown>(user?.role === "admin" ? endpoint : null);
+  const overview = state.data && section === "overview" ? state.data as Record<string, unknown> : {};
+  const mutate = async (path: string, method: string, body?: unknown) => {
+    setError("");
+    setMessage("");
+    try {
+      await api(path, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+      setMessage("Saved.");
+      state.reload();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The change could not be saved.");
+    }
+  };
+  if (authLoading) return <PageFrame><Loading label="Checking administrator access…" /></PageFrame>;
+  if (user?.role !== "admin") return <PageFrame><EmptyState title="Administrator access required" message="Sign in with an administrator account to view platform management." href="/account" action="Sign in" /></PageFrame>;
+  const sections: { id: AdminSection; label: string; icon: typeof Activity }[] = [
+    { id: "overview", label: "Overview", icon: Activity }, { id: "users", label: "Accounts", icon: Users },
+    { id: "films", label: "Films", icon: FilmIcon },
+    { id: "reviews", label: "Reviews", icon: MessageCircle }, { id: "subscriptions", label: "Subscriptions", icon: CreditCard },
+    { id: "transactions", label: "Transactions", icon: CircleDollarSign }, { id: "plans", label: "Plans", icon: Ticket },
+    { id: "audit", label: "Admin log", icon: ClipboardList }
+  ];
+  return <PageFrame wide><div className="admin-shell"><aside className="admin-sidebar"><p className="eyebrow">PLATFORM ADMIN</p><nav>{sections.map(({ id, label, icon: Icon }) => <button className={section === id ? "selected" : ""} key={id} onClick={() => { setSection(id); setError(""); setMessage(""); }}><Icon size={16} />{label}</button>)}</nav></aside>
+    <section className="admin-main">
+      <PageTitle eyebrow="PLATFORM OPERATIONS" title={sections.find((item) => item.id === section)?.label || "Overview"} description="Monitor verified platform activity and manage accounts and content." />
+      {error && <Notice message={error} />}{message && <div className="notice success" role="status">{message}</div>}{state.error && <Notice message={state.error} onRetry={state.reload} />}
+      {state.loading ? <Loading label="Loading platform data…" /> : section === "overview" ? <AdminOverview data={overview} setSection={setSection} mutate={mutate} />
+        : section === "users" ? <AdminUsers data={state.data as { users: AdminUser[]; total: number } | null} search={search} setSearch={setSearch} mutate={mutate} />
+          : section === "films" ? <AdminFilms data={state.data as Film[] | null} mutate={mutate} />
+          : section === "reviews" ? <AdminReviews data={state.data as AdminReview[] | null} mutate={mutate} />
+            : section === "subscriptions" ? <AdminSubscriptions data={state.data as AdminSubscription[] | null} mutate={mutate} />
+              : section === "transactions" ? <AdminTransactions data={state.data as AdminTransaction[] | null} />
+                : section === "plans" ? <AdminPlans data={state.data as AdminPlan[] | null} mutate={mutate} />
+                  : <AdminAudit data={state.data as AdminAuditEntry[] | null} />}
+    </section>
+  </div></PageFrame>;
+}
+
+type AdminUser = { id: number; name: string; email: string; role: string; status: string; activeSubscriptions: number; createdAt: string };
+type AdminReview = { id: number; rating: number; comment: string | null; status: string; filmTitle: string; userName: string; createdAt: string };
+type AdminSubscription = { id: number; userId: number; userName: string; email: string; planId: number; planName: string; status: string; provider: string; startsAt: string; endsAt: string | null };
+type AdminTransaction = { id: number; userName: string | null; provider: string; providerReference: string; type: string; amount: number; currency: string; status: string; verifiedAt: string | null; createdAt: string };
+type AdminPlan = { id: number; name: string; priceMonthly: number; priceAnnual: number; features: string[]; isPopular: boolean };
+type AdminAuditEntry = { id: number; action: string; entityType: string; entityId: number | null; adminName: string; createdAt: string };
+
+function AdminOverview({ data, setSection, mutate }: { data: Record<string, unknown>; setSection: (section: AdminSection) => void; mutate: (path: string, method: string, body?: unknown) => Promise<void> }) {
+  const reviews = Array.isArray(data.recentReviews) ? data.recentReviews as (AdminReview & { id: number })[] : [];
+  const revenue = Array.isArray(data.revenue) ? data.revenue as { currency: string; netAmount: number; verifiedTransactions: number }[] : [];
+  const days = Array.isArray(data.playsByDay) ? data.playsByDay as { date: string; plays: number }[] : [];
+  const maxPlays = Math.max(1, ...days.map((day) => day.plays));
+  const stats: [string, string, string, LucideIcon][] = [
+    ["Accounts", Number(data.users || 0).toLocaleString(), `${Number(data.newUsers30d || 0)} new in 30 days`, Users],
+    ["Creators", Number(data.creatorAccounts || 0).toLocaleString(), `${Number(data.audienceAccounts || 0)} audience accounts`, Clapperboard],
+    ["Published films", Number(data.publishedFilms || 0).toLocaleString(), `${Number(data.pendingFilms || 0)} awaiting review`, FilmIcon],
+    ["Film plays", Number(data.filmPlays || 0).toLocaleString(), `${Number(data.uniqueViewers || 0)} real accounts`, Play],
+    ["Watch time", formatDuration(Number(data.watchTimeSeconds || 0)), "From recorded playback checkpoints", Clock3],
+    ["Reviews", Number(data.reviews || 0).toLocaleString(), `${Number(data.hiddenReviews || 0)} hidden`, MessageCircle],
+    ["Active subscriptions", Number(data.activeSubscriptions || 0).toLocaleString(), `${Number(data.activeSessions || 0)} active sessions`, CreditCard],
+    ["Verified revenue", (data.revenueAvailable ? revenue.map((item) => `${item.currency} ${item.netAmount.toLocaleString()}`).join(" · ") : "Unavailable"), data.paymentIntegrationAvailable ? "Verified transactions only" : "Payment provider not connected", CircleDollarSign]
+  ];
+  return <>
+    <div className="admin-stat-grid">{stats.map(([label, value, detail, Icon]) => <article className="admin-stat-card" key={label}><span><Icon size={17} /></span><small>{label}</small><strong>{value}</strong><em>{detail}</em></article>)}</div>
+    {!data.paymentIntegrationAvailable && <div className="notice">Revenue reporting will show verified transactions when a payment provider is connected. No revenue is estimated or invented.</div>}
+    <section className="panel admin-chart"><div className="panel-heading"><div><p className="eyebrow">LAST 30 DAYS</p><h2>Film plays by day</h2></div></div>{days.some((item) => item.plays > 0) ? <div className="bar-chart large">{days.map((day) => <div className="bar-column" key={day.date} title={`${day.date}: ${day.plays} plays`}><i style={{ height: `${Math.max(4, day.plays / maxPlays * 100)}%` }} /><small>{new Date(`${day.date}T00:00:00`).getDate()}</small></div>)}</div> : <div className="chart-placeholder">No viewer playback has been recorded yet.</div>}</section>
+    <section className="panel admin-review-panel"><div className="panel-heading"><div><p className="eyebrow">RECENT MODERATION</p><h2>Latest reviews</h2></div><button className="text-button" onClick={() => setSection("reviews")}>All reviews<ArrowRight size={14} /></button></div>
+      {reviews.length ? <div className="admin-review-list">{reviews.map((review) => <article key={review.id}><div><strong>{review.filmTitle}</strong><small>{review.userName} · {review.rating}/5 · {review.status}</small><p>{review.comment || "No written comment."}</p></div><button className="text-button" onClick={() => void mutate(`admin/reviews/${review.id}`, "PATCH", { status: review.status === "hidden" ? "published" : "hidden" })}>{review.status === "hidden" ? "Restore" : "Hide"}</button></article>)}</div> : <p className="muted panel-empty">No audience reviews recorded.</p>}
+    </section>
+  </>;
+}
+
+function AdminUsers({ data, search, setSearch, mutate }: { data: { users: AdminUser[]; total: number } | null; search: string; setSearch: (value: string) => void; mutate: (path: string, method: string, body?: unknown) => Promise<void> }) {
+  return <section className="panel"><div className="admin-toolbar"><label className="search-box"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name or email" /></label><span>{data?.total || 0} accounts</span></div>
+    {data?.users.length ? <div className="table-wrap"><table className="film-table"><thead><tr><th>Account</th><th>Role</th><th>Subscriptions</th><th>Created</th><th>Status</th><th /></tr></thead><tbody>{data.users.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small className="admin-subline">{account.email}</small></td><td>{account.role === "admin" ? "Admin" : <select aria-label={`Role for ${account.name}`} value={account.role} onChange={(event) => void mutate("admin/users", "PATCH", { userId: account.id, role: event.target.value })}><option value="audience">Audience</option><option value="creator">Creator</option></select>}</td><td>{account.activeSubscriptions}</td><td>{new Date(account.createdAt).toLocaleDateString()}</td><td><span className={`status-pill ${account.status === "active" ? "status-active" : "status-inactive"}`}>{account.status}</span></td><td>{account.role !== "admin" && <button className="text-button danger" onClick={() => void mutate("admin/users", "PATCH", { userId: account.id, status: account.status === "active" ? "suspended" : "active" })}>{account.status === "active" ? "Suspend" : "Reactivate"}</button>}</td></tr>)}</tbody></table></div> : <p className="muted panel-empty">No registered accounts match this search.</p>}
+  </section>;
+}
+
+function AdminFilms({ data, mutate }: { data: Film[] | null; mutate: (path: string, method: string, body?: unknown) => Promise<void> }) {
+  return <section className="panel"><div className="panel-heading"><div><p className="eyebrow">CATALOG CONTROL</p><h2>Film review and publishing</h2></div></div>
+    {data?.length ? <div className="table-wrap"><table className="film-table"><thead><tr><th>Film</th><th>Creator</th><th>Status</th><th>Featured</th><th>Festival winner</th></tr></thead><tbody>{data.map((film) => <tr key={film.id}>
+      <td><Link href={`/film/${film.id}`} className="table-film"><Poster film={film} /><span><strong>{film.title}</strong><small>{film.category || film.genre || "Film"}</small></span></Link></td>
+      <td>{film.creatorName}</td>
+      <td><select aria-label={`Status for ${film.title}`} value={film.status || "published"} onChange={(event) => void mutate(`admin/films/${film.id}`, "PATCH", { status: event.target.value })}><option value="draft">Draft</option><option value="pending">Pending</option><option value="published">Published</option><option value="rejected">Rejected</option></select></td>
+      <td><input type="checkbox" aria-label={`Feature ${film.title}`} checked={film.isFeatured} onChange={(event) => void mutate(`admin/films/${film.id}`, "PATCH", { isFeatured: event.target.checked })} /></td>
+      <td><input type="checkbox" aria-label={`Mark ${film.title} festival winner`} checked={film.isFestivalWinner} onChange={(event) => void mutate(`admin/films/${film.id}`, "PATCH", { isFestivalWinner: event.target.checked })} /></td>
+    </tr>)}</tbody></table></div> : <p className="muted panel-empty">No films from registered creator accounts yet.</p>}
+  </section>;
+}
+
+function AdminReviews({ data, mutate }: { data: AdminReview[] | null; mutate: (path: string, method: string, body?: unknown) => Promise<void> }) {
+  return <section className="panel"><div className="panel-heading"><div><p className="eyebrow">AUDIENCE CONTENT</p><h2>Review moderation</h2></div></div>
+    {data?.length ? <div className="admin-review-list">{data.map((review) => <article key={review.id}><div><strong>{review.filmTitle} · {review.rating}/5</strong><small>{review.userName} · {new Date(review.createdAt).toLocaleDateString()} · {review.status}</small><p>{review.comment || "No written comment."}</p></div><button className="text-button" onClick={() => void mutate(`admin/reviews/${review.id}`, "PATCH", { status: review.status === "hidden" ? "published" : "hidden" })}>{review.status === "hidden" ? "Restore" : "Hide"}</button></article>)}</div> : <p className="muted panel-empty">No audience reviews to moderate.</p>}
+  </section>;
+}
+
+function AdminSubscriptions({ data, mutate }: { data: AdminSubscription[] | null; mutate: (path: string, method: string, body?: unknown) => Promise<void> }) {
+  const users = useLoad<{ users: AdminUser[] }>("admin/users?limit=100");
+  const plans = useLoad<AdminPlan[]>("admin/plans");
+  const [userId, setUserId] = useState("");
+  const [planId, setPlanId] = useState("");
+  return <div className="admin-stack"><form className="panel admin-inline-form" onSubmit={(event) => {
+    event.preventDefault();
+    void mutate("admin/subscriptions", "POST", { userId: Number(userId), planId: Number(planId), status: "active" });
+  }}><div><p className="eyebrow">MANUAL ENTITLEMENT</p><h2>Grant a subscription</h2><p className="muted">Manual grants do not represent a payment or add revenue.</p></div>
+    <label className="form-field"><span>Account</span><select required value={userId} onChange={(event) => setUserId(event.target.value)}><option value="">Select account</option>{(users.data?.users || []).map((user) => <option key={user.id} value={user.id}>{user.name} · {user.email}</option>)}</select></label>
+    <label className="form-field"><span>Plan</span><select required value={planId} onChange={(event) => setPlanId(event.target.value)}><option value="">Select plan</option>{(plans.data || []).map((plan) => <option key={plan.id} value={plan.id}>{plan.name}</option>)}</select></label><button className="button button-gold">Grant access</button>
+  </form><section className="panel"><div className="panel-heading"><div><p className="eyebrow">ENTITLEMENTS</p><h2>Subscriptions</h2></div></div>
+    {data?.length ? <div className="table-wrap"><table className="film-table"><thead><tr><th>Account</th><th>Plan</th><th>Source</th><th>Started</th><th>Status</th><th /></tr></thead><tbody>{data.map((subscription) => <tr key={subscription.id}><td><strong>{subscription.userName}</strong><small className="admin-subline">{subscription.email}</small></td><td>{subscription.planName}</td><td>{subscription.provider}</td><td>{new Date(subscription.startsAt).toLocaleDateString()}</td><td><span className="status-pill">{subscription.status}</span></td><td><button className="text-button" onClick={() => void mutate(`admin/subscriptions/${subscription.id}`, "PATCH", { status: subscription.status === "active" ? "canceled" : "active" })}>{subscription.status === "active" ? "Cancel" : "Activate"}</button></td></tr>)}</tbody></table></div> : <p className="muted panel-empty">No subscriptions on real accounts yet.</p>}
+  </section></div>;
+}
+
+function AdminTransactions({ data }: { data: AdminTransaction[] | null }) {
+  return <section className="panel"><div className="panel-heading"><div><p className="eyebrow">VERIFIED PAYMENT RECORDS</p><h2>Transactions</h2></div></div>
+    {data?.length ? <div className="table-wrap"><table className="film-table"><thead><tr><th>Account</th><th>Type</th><th>Amount</th><th>Provider / reference</th><th>Status</th><th>Verified</th></tr></thead><tbody>{data.map((transaction) => <tr key={transaction.id}><td>{transaction.userName || "Account removed"}</td><td className="capitalize">{transaction.type.replaceAll("_", " ")}</td><td>{transaction.currency} {transaction.amount.toLocaleString()}</td><td>{transaction.provider}<small className="admin-subline">{transaction.providerReference}</small></td><td>{transaction.status}</td><td>{transaction.verifiedAt ? new Date(transaction.verifiedAt).toLocaleDateString() : "Not verified"}</td></tr>)}</tbody></table></div> : <p className="muted panel-empty">No verified payment transactions are recorded. Connect a payment provider before reporting revenue.</p>}
+  </section>;
+}
+
+function AdminPlans({ data, mutate }: { data: AdminPlan[] | null; mutate: (path: string, method: string, body?: unknown) => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setBusy(true);
+    const form = new FormData(event.currentTarget);
+    const payload = {
+      name: String(form.get("name") || ""),
+      priceMonthly: Number(form.get("priceMonthly")),
+      priceAnnual: Number(form.get("priceAnnual")),
+      features: String(form.get("features") || "").split("\n").map((feature) => feature.trim()).filter(Boolean),
+    };
+    await mutate("admin/plans", "POST", payload);
+    setBusy(false);
+  };
+  const savePlan = async (event: FormEvent<HTMLFormElement>, plan: AdminPlan) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await mutate(`admin/plans/${plan.id}`, "PATCH", {
+      name: String(form.get("name") || ""),
+      priceMonthly: Number(form.get("priceMonthly")),
+      priceAnnual: Number(form.get("priceAnnual")),
+      features: String(form.get("features") || "").split("\n").map((feature) => feature.trim()).filter(Boolean),
+      isPopular: form.get("isPopular") === "on",
+    });
+  };
+  return <div className="admin-stack"><form className="panel admin-plan-form" onSubmit={(event) => void submit(event)}><p className="eyebrow">PLAN MANAGEMENT</p><h2>Add a plan</h2>
+    <div className="form-grid"><label className="form-field"><span>Name</span><input name="name" required maxLength={100} /></label><label className="form-field"><span>Monthly price (KES)</span><input name="priceMonthly" type="number" min="0" step=".01" required /></label><label className="form-field"><span>Annual price (KES)</span><input name="priceAnnual" type="number" min="0" step=".01" required /></label><label className="form-field"><span>Features (one per line)</span><textarea name="features" rows={3} /></label></div>
+    <button className="button button-gold" disabled={busy}>{busy ? "Saving…" : "Add plan"}</button></form>
+    <section className="panel"><div className="panel-heading"><div><p className="eyebrow">AVAILABLE PLANS</p><h2>Subscription plans</h2></div></div>
+      {Array.isArray(data) && data.map((plan) => <form className="admin-plan-edit" key={plan.id} onSubmit={(event) => void savePlan(event, plan)}>
+        <div className="admin-plan-fields"><label className="form-field"><span>Plan name</span><input name="name" defaultValue={plan.name} required maxLength={100} /></label>
+          <label className="form-field"><span>Monthly (KES)</span><input name="priceMonthly" type="number" min="0" step=".01" defaultValue={plan.priceMonthly} required /></label>
+          <label className="form-field"><span>Annual (KES)</span><input name="priceAnnual" type="number" min="0" step=".01" defaultValue={plan.priceAnnual} required /></label>
+          <label className="form-field"><span>Features (one per line)</span><textarea name="features" rows={3} defaultValue={plan.features.join("\n")} /></label>
+          <label className="form-check"><input name="isPopular" type="checkbox" defaultChecked={plan.isPopular} />Popular plan</label>
+        </div><div className="admin-plan-actions"><button className="button button-outline button-small">Save changes</button><button type="button" className="text-button danger" onClick={() => void mutate(`admin/plans/${plan.id}`, "DELETE")}>Delete</button></div>
+      </form>)}
+    </section></div>;
+}
+
+function AdminAudit({ data }: { data: AdminAuditEntry[] | null }) {
+  return <section className="panel"><div className="panel-heading"><div><p className="eyebrow">ADMINISTRATIVE CHANGES</p><h2>Audit log</h2></div></div>
+    {data?.length ? <div className="table-wrap"><table className="film-table"><thead><tr><th>When</th><th>Administrator</th><th>Action</th><th>Record</th></tr></thead><tbody>{data.map((entry) => <tr key={entry.id}><td>{new Date(entry.createdAt).toLocaleString()}</td><td>{entry.adminName}</td><td>{entry.action}</td><td>{entry.entityType} {entry.entityId ?? ""}</td></tr>)}</tbody></table></div> : <p className="muted panel-empty">No administrative changes recorded.</p>}
+  </section>;
 }
 
 function ReelPage() {
@@ -545,13 +1216,12 @@ function CreatorAnalytics() {
   const state = useLoad<Record<string, unknown>>("creator/analytics");
   const data = state.data || {};
   const byDay = Array.isArray(data.viewsByDay) ? data.viewsByDay as { date: string; views: number }[] : [];
-  const regions = Array.isArray(data.topRegions) ? data.topRegions as { name: string; value: number }[] : [];
   const max = Math.max(1, ...byDay.map((item) => Number(item.views || 0)));
   return <CreatorLayout><PageTitle eyebrow="CREATOR STUDIO" title="Know your audience." description="A clearer picture of who's spending time with your stories." />
     {state.error && <Notice message={state.error} onRetry={state.reload} />}{state.loading ? <Loading label="Loading your audience data…" /> : <>
-      <div className="stat-grid four"><StatCard label="Total watch time" value={`${Math.floor(Number(data.totalWatchTime || 0) / 60)} hrs`} icon={Clock3} /><StatCard label="Avg. completion" value={`${Number(data.avgWatchThroughRate || 0)}%`} icon={TrendingUp} /><StatCard label="Average rating" value={Number(data.avgRating || 0).toFixed(1)} icon={Star} /><StatCard label="Total views" value={Number(data.totalViews || 0).toLocaleString()} icon={Eye} /></div>
+      <div className="stat-grid five"><StatCard label="Total watch time" value={formatDuration(Number(data.totalWatchTime || 0) * 60)} icon={Clock3} /><StatCard label="Avg. completion" value={`${Number(data.avgWatchThroughRate || 0)}%`} icon={TrendingUp} /><StatCard label="Audience rating" value={typeof data.avgRating === "number" ? data.avgRating.toFixed(1) : "—"} icon={Star} /><StatCard label="Film plays" value={Number(data.totalViews || 0).toLocaleString()} icon={Eye} /><StatCard label="Unique viewers" value={Number(data.uniqueViewers || 0).toLocaleString()} icon={Users} /></div>
       <div className="dashboard-columns"><article className="panel"><div className="panel-heading"><div><p className="eyebrow">LAST 30 DAYS</p><h2>Film engagement</h2></div></div>{byDay.some((item) => item.views > 0) ? <div className="bar-chart large">{byDay.map((item) => <div className="bar-column" key={item.date} title={`${item.date}: ${item.views} plays`}><i style={{ height: `${Math.max(4, Number(item.views) / max * 100)}%` }} /><small>{new Date(`${item.date}T00:00:00`).getDate()}</small></div>)}</div> : <div className="chart-placeholder"><BarChart3 size={22} />Real viewing activity will appear here when audiences play your films.</div>}</article>
-        <article className="panel"><div className="panel-heading"><div><p className="eyebrow">WHERE THEY WATCH</p><h2>Top regions</h2></div><Globe2 size={18} /></div>{regions.length ? <div className="region-list">{regions.map((item, index) => <div className="region-row" key={item.name}><span className="region-rank">0{index + 1}</span><span>{item.name}</span><strong>{item.value}%</strong></div>)}</div> : <div className="chart-placeholder">Audience regions will be shown when viewing data is available.</div>}</article></div>
+        <article className="panel chart-placeholder">Unique viewers are counted from distinct, registered audience accounts. Demo accounts are excluded.</article></div>
     </>}</CreatorLayout>;
 }
 
@@ -559,11 +1229,12 @@ function CreatorEarnings() {
   const state = useLoad<Record<string, unknown>>("creator/earnings");
   const data = state.data || {};
   const history = Array.isArray(data.withdrawals) ? data.withdrawals as { id: number; amount: number; method: string; status: string; createdAt: string }[] : [];
+  const revenue = Array.isArray(data.revenueByCurrency) ? data.revenueByCurrency as { currency: string; total: number; verifiedTransactions: number }[] : [];
   return <CreatorLayout><PageTitle eyebrow="CREATOR STUDIO" title="Earnings & payouts." description="Revenue reporting will be available once platform payments are connected." action={<button className="button button-glass" disabled title="Payouts are not configured"><Wallet size={15} />Payouts unavailable</button>} />
     {state.error && <Notice message={state.error} onRetry={state.reload} />}
     {state.loading ? <Loading label="Loading earnings…" /> : <>
-      <div className="stat-grid three"><StatCard label="Available balance" value="Unavailable" icon={Wallet} /><StatCard label="Pending clearing" value="Unavailable" icon={Clock3} /><StatCard label="Total earned" value="Unavailable" icon={CircleDollarSign} /></div>
-      <section className="panel revenue-panel"><div className="panel-heading"><div><p className="eyebrow">REVENUE SOURCES</p><h2>Not connected yet</h2></div></div><p className="muted panel-empty">Views and watch time are tracked from real playback events. Subscription charges, ticket purchases, advertising settlements, and creator payouts are not connected, so no earnings are estimated or displayed.</p></section>
+      <div className="stat-grid three"><StatCard label="Available balance" value="Unavailable" icon={Wallet} /><StatCard label="Pending clearing" value="Unavailable" icon={Clock3} /><StatCard label="Verified revenue" value={revenue.map((item) => `${item.currency} ${item.total.toLocaleString()}`).join(" · ") || "Unavailable"} icon={CircleDollarSign} /></div>
+      <section className="panel revenue-panel"><div className="panel-heading"><div><p className="eyebrow">VERIFIED TRANSACTIONS</p><h2>{revenue.length ? "Recorded revenue" : "No payment records"}</h2></div></div><p className="muted panel-empty">{String(data.message || "Revenue uses verified payment transactions only. No estimates are shown.")}</p>{revenue.map((item) => <p className="muted panel-empty" key={item.currency}>{item.currency} {item.total.toLocaleString()} across {item.verifiedTransactions} verified transactions.</p>)}</section>
       <section className="panel"><div className="panel-heading"><div><p className="eyebrow">PAYOUT ACTIVITY</p><h2>Recent withdrawals</h2></div></div>{history.length ? <div className="table-wrap"><table className="film-table"><thead><tr><th>Date</th><th>Method</th><th>Amount</th><th>Status</th></tr></thead><tbody>{history.map((item) => <tr key={item.id}><td>{new Date(item.createdAt).toLocaleDateString()}</td><td className="capitalize">{item.method.replaceAll("_", " ")}</td><td>KES {Number(item.amount).toLocaleString()}</td><td><span className="status-pill">{item.status}</span></td></tr>)}</tbody></table></div> : <p className="muted panel-empty">No payout activity. Payout requests are disabled until settlement processing is connected.</p>}</section>
     </>}</CreatorLayout>;
 }
