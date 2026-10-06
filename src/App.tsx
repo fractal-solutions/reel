@@ -19,6 +19,47 @@ type BrowserInstallPrompt = Event & {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
 };
+type UploadStatus = { name: string; size: number; progress: number; status: "uploading" | "complete" | "failed" };
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB`;
+}
+
+function uploadFile(file: File, onProgress: (percent: number) => void) {
+  return new Promise<{ url: string }>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", "/api/uploads");
+    request.setRequestHeader("Content-Type", file.type);
+    request.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable) onProgress(Math.min(100, Math.round(event.loaded / event.total * 100)));
+    });
+    request.addEventListener("load", () => {
+      let payload: { url?: string; error?: string } = {};
+      try { payload = JSON.parse(request.responseText) as typeof payload; }
+      catch { /* The status below reports invalid or unsuccessful server responses. */ }
+      if (request.status >= 200 && request.status < 300 && payload.url) resolve({ url: payload.url });
+      else reject(new Error(payload.error || `Upload failed (${request.status || "network error"})`));
+    });
+    request.addEventListener("error", () => reject(new Error("Upload failed. Check your connection and try again.")));
+    request.addEventListener("abort", () => reject(new Error("Upload was cancelled.")));
+    request.send(file);
+  });
+}
+
+function CreatorWizardSteps({ steps, current }: { steps: string[]; current: number }) {
+  return <ol className="creator-wizard-steps" aria-label="Upload steps">{steps.map((step, index) =>
+    <li key={step} className={index === current ? "current" : index < current ? "complete" : ""} aria-current={index === current ? "step" : undefined}>
+      <span>{index < current ? <Check size={13} /> : index + 1}</span><small>{step}</small>
+    </li>)}</ol>;
+}
+
+function UploadFileStatus({ upload }: { upload: UploadStatus }) {
+  return <div className={`upload-file-status ${upload.status}`} aria-live="polite">
+    <div className="upload-file-details"><strong>{upload.name}</strong><span>{formatFileSize(upload.size)} · {upload.status === "complete" ? "Uploaded" : upload.status === "failed" ? "Upload failed" : `Uploading ${upload.progress}%`}</span></div>
+    <div className="upload-progress-track" role="progressbar" aria-label={`Uploading ${upload.name}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={upload.progress}><i style={{ width: `${upload.progress}%` }} /></div>
+  </div>;
+}
 
 function Link({ href, children, className, ...props }: { href: string; children: ReactNode; className?: string } & AnchorHTMLAttributes<HTMLAnchorElement>) {
   const { navigate } = useContext(RouterContext);
@@ -1397,6 +1438,8 @@ function CreatorReel() {
     const [mediaType, setMediaType] = useState<"video" | "audio">("video");
     const [form, setForm] = useState({ title: "", description: "", videoUrl: "", posterUrl: "", filmId: "" });
     const [uploading, setUploading] = useState<"videoUrl" | "posterUrl" | null>(null);
+    const [uploads, setUploads] = useState<Partial<Record<"videoUrl" | "posterUrl", UploadStatus>>>({});
+    const [step, setStep] = useState(0);
     const [busy, setBusy] = useState(false);
     const [notice, setNotice] = useState("");
     const [error, setError] = useState("");
@@ -1412,20 +1455,21 @@ function CreatorReel() {
       const isPoster = key === "posterUrl";
       const limit = (isPoster ? 10 : mediaType === "audio" ? 100 : 500) * 1024 * 1024;
       if (file.size > limit) {
+        setUploads((current) => ({ ...current, [key]: { name: file.name, size: file.size, progress: 0, status: "failed" } }));
         setError(`${isPoster ? "Poster images" : mediaType === "audio" ? "Audio files" : "Videos"} must be ${isPoster ? "10 MB" : mediaType === "audio" ? "100 MB" : "500 MB"} or smaller.`);
         return;
       }
       setError("");
       setUploading(key);
+      setUploads((current) => ({ ...current, [key]: { name: file.name, size: file.size, progress: 0, status: "uploading" } }));
       try {
-        const response = await fetch("/api/uploads", { method: "POST", headers: { "Content-Type": file.type }, body: file });
-        if (!response.ok) {
-          const payload = await response.json().catch(() => null) as { error?: string } | null;
-          throw new Error(payload?.error || `Upload failed (${response.status})`);
-        }
-        const result = await response.json() as { url: string };
+        const result = await uploadFile(file, (progress) => setUploads((current) => ({
+          ...current, [key]: { name: file.name, size: file.size, progress, status: "uploading" },
+        })));
         update(key, result.url);
+        setUploads((current) => ({ ...current, [key]: { name: file.name, size: file.size, progress: 100, status: "complete" } }));
       } catch (reason) {
+        setUploads((current) => ({ ...current, [key]: { name: file.name, size: file.size, progress: 0, status: "failed" } }));
         setError(reason instanceof Error ? reason.message : "Unable to upload this media file.");
       } finally {
         setUploading(null);
@@ -1433,6 +1477,11 @@ function CreatorReel() {
     };
     const submit = async (event: FormEvent) => {
       event.preventDefault();
+      if (step < 2) {
+        setError("");
+        setStep((current) => current + 1);
+        return;
+      }
       setError("");
       setNotice("");
       setBusy(true);
@@ -1445,6 +1494,8 @@ function CreatorReel() {
         await api("creator/reel-submissions", { method: "POST", body: JSON.stringify(payload) });
         setNotice("Your Reel upload has been submitted for moderation.");
         setForm({ title: "", description: "", videoUrl: "", posterUrl: "", filmId: "" });
+        setUploads({});
+        setStep(0);
         submissions.reload();
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : "Unable to submit this Reel upload.");
@@ -1458,21 +1509,32 @@ function CreatorReel() {
       {notice && <div className="notice success" role="status">{notice}</div>}
       {error && <Notice message={error} />}
       {films.error && <Notice message={films.error} onRetry={films.reload} />}
-      <form className="panel reel-upload-form" onSubmit={(event) => void submit(event)}>
-        <label className="form-field"><span>Reel section</span><select value={category} onChange={(event) => { const next = event.target.value as ReelCategory; setCategory(next); setMediaType(next === "podcasts" ? "audio" : "video"); }}>{reelCategories.map(({ id, label }) => <option value={id} key={id}>{label}</option>)}</select></label>
-        <p className="reel-category-help">{categoryDescriptions[category]}</p>
-        <div className="form-grid">
-          {category === "podcasts" && <label className="form-field"><span>Podcast format</span><select value={mediaType} onChange={(event) => setMediaType(event.target.value as "video" | "audio")}><option value="audio">Audio</option><option value="video">Video</option></select></label>}
-          <label className="form-field full"><span>Title</span><input value={form.title} onChange={(event) => update("title", event.target.value)} required maxLength={200} placeholder={category === "podcasts" ? "Episode title" : category === "interviews" ? "Who or what is this interview about?" : "Give your video a title"} /></label>
-          <label className="form-field full"><span>Description</span><textarea value={form.description} onChange={(event) => update("description", event.target.value)} rows={3} maxLength={4000} placeholder="Add context for viewers." /></label>
-          <label className="form-field full"><span>{mediaType === "audio" ? "Audio URL" : "Video URL"}</span><input value={form.videoUrl} onChange={(event) => update("videoUrl", event.target.value)} required maxLength={2048} placeholder={`https://… or upload a ${mediaType} file below`} /></label>
-          <div className="reel-file-field"><label className="file-picker"><span><Upload size={14} />{uploading === "videoUrl" ? "Uploading…" : `Choose ${mediaType} file`}</span><input type="file" accept={mediaType === "audio" ? "audio/mpeg,audio/mp4,audio/wav,audio/ogg,audio/aac" : "video/mp4,video/webm,video/quicktime"} disabled={uploading !== null} onChange={(event) => { void uploadMedia("videoUrl", event.currentTarget.files?.[0]); event.currentTarget.value = ""; }} /></label><small>{mediaType === "audio" ? "MP3, M4A, WAV, OGG, AAC · max 100 MB" : "MP4, WebM, QuickTime · max 500 MB"}</small></div>
-          <label className="form-field full"><span>Thumbnail URL (optional)</span><input value={form.posterUrl} onChange={(event) => update("posterUrl", event.target.value)} maxLength={2048} placeholder="https://… or upload an image below" /></label>
-          <div className="reel-file-field"><label className="file-picker"><span><Upload size={14} />{uploading === "posterUrl" ? "Uploading…" : "Choose thumbnail"}</span><input type="file" accept="image/jpeg,image/png,image/webp" disabled={uploading !== null} onChange={(event) => { void uploadMedia("posterUrl", event.currentTarget.files?.[0]); event.currentTarget.value = ""; }} /></label><small>JPEG, PNG, WebP · max 10 MB</small></div>
-          <label className="form-field full"><span>Related film (optional)</span><select value={form.filmId} onChange={(event) => update("filmId", event.target.value)}><option value="">No related film — standalone Reel content</option>{films.data?.filter((film) => film.status === "published").map((film) => <option value={film.id} key={film.id}>{film.title}</option>)}</select></label>
-        </div>
-        <p className="reel-category-help">The section you select determines where this upload appears after approval. It will not be added to a film unless you link one above.</p>
-        <div className="form-actions"><button className="button button-gold" disabled={busy || uploading !== null}>{busy ? "Submitting…" : "Submit for review"}<ArrowRight size={15} /></button></div>
+      <form className="panel reel-upload-form creator-upload-wizard" onSubmit={(event) => void submit(event)}>
+        <CreatorWizardSteps steps={["Choose section", "Add your media", "Review & submit"]} current={step} />
+        {step === 0 && <>
+          <div className="form-grid">
+            <label className="form-field"><span>Where should this appear?</span><select value={category} onChange={(event) => { const next = event.target.value as ReelCategory; setCategory(next); setMediaType(next === "podcasts" ? "audio" : "video"); }}>{reelCategories.map(({ id, label }) => <option value={id} key={id}>{label}</option>)}</select></label>
+            {category === "podcasts" && <label className="form-field"><span>Podcast format</span><select value={mediaType} onChange={(event) => setMediaType(event.target.value as "video" | "audio")}><option value="audio">Audio</option><option value="video">Video</option></select></label>}
+            <label className="form-field full"><span>Give it a title</span><input value={form.title} onChange={(event) => update("title", event.target.value)} required maxLength={200} placeholder={category === "podcasts" ? "Episode title" : category === "interviews" ? "Who or what is this interview about?" : "Give your video a title"} /></label>
+          </div>
+          <p className="reel-category-help">{categoryDescriptions[category]} The selected section determines where your upload appears after approval.</p>
+        </>}
+        {step === 1 && <>
+          <div className="form-grid">
+            <label className="form-field full"><span>Description <i>(optional)</i></span><textarea value={form.description} onChange={(event) => update("description", event.target.value)} rows={3} maxLength={4000} placeholder="Add context for viewers." /></label>
+            <label className="form-field full"><span>{mediaType === "audio" ? "Audio file or URL" : "Video file or URL"}</span><input value={form.videoUrl} onChange={(event) => { update("videoUrl", event.target.value); setUploads((current) => ({ ...current, videoUrl: undefined })); }} required maxLength={2048} placeholder={`Paste a link or upload a ${mediaType} file below`} /></label>
+            <div className="reel-file-field"><label className="file-picker"><span><Upload size={14} />{uploading === "videoUrl" ? "Uploading…" : `Choose ${mediaType} file`}</span><input type="file" accept={mediaType === "audio" ? "audio/mpeg,audio/mp4,audio/wav,audio/ogg,audio/aac" : "video/mp4,video/webm,video/quicktime"} disabled={uploading !== null} onChange={(event) => { void uploadMedia("videoUrl", event.currentTarget.files?.[0]); event.currentTarget.value = ""; }} /></label><small>{mediaType === "audio" ? "MP3, M4A, WAV, OGG, AAC · max 100 MB" : "MP4, WebM, QuickTime · max 500 MB"}</small>{uploads.videoUrl && <UploadFileStatus upload={uploads.videoUrl} />}</div>
+            <label className="form-field full"><span>Thumbnail link <i>(optional)</i></span><input value={form.posterUrl} onChange={(event) => { update("posterUrl", event.target.value); setUploads((current) => ({ ...current, posterUrl: undefined })); }} maxLength={2048} placeholder="Paste a link or upload an image" /></label>
+            <div className="reel-file-field"><label className="file-picker"><span><Upload size={14} />{uploading === "posterUrl" ? "Uploading…" : "Choose thumbnail"}</span><input type="file" accept="image/jpeg,image/png,image/webp" disabled={uploading !== null} onChange={(event) => { void uploadMedia("posterUrl", event.currentTarget.files?.[0]); event.currentTarget.value = ""; }} /></label><small>JPEG, PNG, WebP · max 10 MB</small>{uploads.posterUrl && <UploadFileStatus upload={uploads.posterUrl} />}</div>
+            <label className="form-field full"><span>Connect to a film <i>(optional)</i></span><select value={form.filmId} onChange={(event) => update("filmId", event.target.value)}><option value="">Standalone Reel content</option>{films.data?.filter((film) => film.status === "published").map((film) => <option value={film.id} key={film.id}>{film.title}</option>)}</select></label>
+          </div>
+        </>}
+        {step === 2 && <div className="upload-review">
+          <p className="eyebrow">READY FOR REVIEW</p><h2>{form.title}</h2>
+          <dl><div><dt>Section</dt><dd>{categoryLabel(category)}</dd></div><div><dt>Format</dt><dd>{mediaType === "audio" ? "Audio podcast" : "Video"}</dd></div><div><dt>Media</dt><dd>{form.videoUrl.startsWith("/uploads/") ? uploads.videoUrl?.name || "Uploaded to FilamuReel" : form.videoUrl}</dd></div><div><dt>Thumbnail</dt><dd>{form.posterUrl ? "Added" : "Not provided"}</dd></div><div><dt>Related film</dt><dd>{films.data?.find((film) => String(film.id) === form.filmId)?.title || "Standalone content"}</dd></div></dl>
+          <p className="reel-category-help">Your upload stays private until reviewed. Once approved, it appears in {categoryLabel(category)} for audiences to discover.</p>
+        </div>}
+        <div className="form-actions wizard-actions">{step > 0 && <button type="button" className="button button-glass" onClick={() => setStep((current) => current - 1)}><ArrowLeft size={15} />Back</button>}<button className="button button-gold" disabled={busy || uploading !== null}>{busy ? "Submitting…" : step === 2 ? "Submit for review" : "Continue"}{step === 2 ? <Upload size={15} /> : <ArrowRight size={15} />}</button></div>
       </form>
       <section className="panel reel-submission-list"><div className="panel-heading"><div><p className="eyebrow">YOUR UPLOADS</p><h2>Submission status</h2></div><button className="text-button" onClick={submissions.reload}>Refresh</button></div>
         {submissions.error && <Notice message={submissions.error} onRetry={submissions.reload} />}
@@ -1517,7 +1579,9 @@ function UploadFilm() {
   const { navigate } = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [uploading, setUploading] = useState<Record<string, boolean>>({});
+  const [uploading, setUploading] = useState<string | null>(null);
+  const [uploads, setUploads] = useState<Partial<Record<"posterUrl" | "trailerUrl" | "videoUrl", UploadStatus>>>({});
+  const [step, setStep] = useState(0);
   const [form, setForm] = useState({ title: "", description: "", category: "", genre: "", region: "", language: "", director: "", cast: "", duration: "", posterUrl: "", trailerUrl: "", videoUrl: "", monetization: "subscription", price: "" });
   const update = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }));
   const upload = async (key: "posterUrl" | "trailerUrl" | "videoUrl", file?: File) => {
@@ -1525,31 +1589,34 @@ function UploadFilm() {
     const isPoster = key === "posterUrl";
     const limit = (isPoster ? 10 : 500) * 1024 * 1024;
     if (file.size > limit) {
+      setUploads((current) => ({ ...current, [key]: { name: file.name, size: file.size, progress: 0, status: "failed" } }));
       setError(`${isPoster ? "Poster images" : "Videos"} must be ${isPoster ? "10 MB" : "500 MB"} or smaller.`);
       return;
     }
     setError("");
-    setUploading((state) => ({ ...state, [key]: true }));
+    setUploading(key);
+    setUploads((current) => ({ ...current, [key]: { name: file.name, size: file.size, progress: 0, status: "uploading" } }));
     try {
-      const response = await fetch("/api/uploads", {
-        method: "POST",
-        headers: { "Content-Type": file.type },
-        body: file,
-      });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null) as { error?: string } | null;
-        throw new Error(payload?.error || `Upload failed (${response.status})`);
-      }
-      const result = await response.json() as { url: string };
+      const result = await uploadFile(file, (progress) => setUploads((current) => ({
+        ...current, [key]: { name: file.name, size: file.size, progress, status: "uploading" },
+      })));
       update(key, result.url);
+      setUploads((current) => ({ ...current, [key]: { name: file.name, size: file.size, progress: 100, status: "complete" } }));
     } catch (reason) {
+      setUploads((current) => ({ ...current, [key]: { name: file.name, size: file.size, progress: 0, status: "failed" } }));
       setError(reason instanceof Error ? reason.message : "Unable to upload this media file.");
     } finally {
-      setUploading((state) => ({ ...state, [key]: false }));
+      setUploading(null);
     }
   };
   const submit = async (event: FormEvent) => {
-    event.preventDefault(); setBusy(true); setError("");
+    event.preventDefault();
+    if (step < 3) {
+      setError("");
+      setStep((current) => current + 1);
+      return;
+    }
+    setBusy(true); setError("");
     try {
       const payload = Object.fromEntries(Object.entries(form).filter(([, value]) => value !== ""));
       await api("films", {
@@ -1568,20 +1635,29 @@ function UploadFilm() {
   const field = (key: keyof typeof form, label: string, placeholder = "", type = "text") => <label className="form-field"><span>{label}</span><input type={type} required={["title", "category", "description"].includes(key)} min={type === "number" ? "0" : undefined} value={form[key]} onChange={(event) => update(key, event.target.value)} placeholder={placeholder} /></label>;
   return <CreatorLayout><PageTitle eyebrow="CREATOR STUDIO / RELEASES" title="A new story." description="Add the details that will help your film find its audience." />
     {error && <Notice message={error} />}{categories.error && <Notice message={categories.error} onRetry={categories.reload} />}
-    <form className="upload-form" onSubmit={submit}><section className="panel form-panel"><p className="eyebrow">THE FILM</p><div className="form-grid">{field("title", "Film title", "A title worth remembering")}<label className="form-field"><span>Category</span><select required value={form.category} onChange={(e) => update("category", e.target.value)}><option value="">Choose a category</option>{(categories.data || []).map((category) => <option key={category.slug} value={category.slug}>{category.name}</option>)}</select></label><label className="form-field full"><span>Synopsis</span><textarea rows={5} required minLength={10} value={form.description} onChange={(e) => update("description", e.target.value)} placeholder="What is the story you want to tell?" /></label>{field("genre", "Genre", "Drama, Documentary…")}{field("region", "Country / region", "Ghana")}{field("language", "Language", "English, Swahili…")}{field("director", "Director", "Director name")}{field("duration", "Runtime (minutes)", "e.g. 98", "number")}{field("cast", "Cast", "Names, separated by commas")}</div></section>
-      <section className="panel form-panel"><p className="eyebrow">HOW IT'S SHARED</p><div className="form-grid"><label className="form-field"><span>Access model</span><select value={form.monetization} onChange={(e) => update("monetization", e.target.value)}><option value="subscription">Subscription</option><option value="free">Free</option><option value="ad_supported">Ad-supported</option><option value="pay_per_view">Pay per view</option></select></label>{form.monetization === "pay_per_view" && field("price", "Ticket price (KES)", "500", "number")}</div></section>
-      <section className="panel form-panel"><p className="eyebrow">MEDIA ASSETS</p><div className="form-grid">
-        {(["posterUrl", "trailerUrl", "videoUrl"] as const).map((key) => {
-          const label = key === "posterUrl" ? "Poster image" : key === "trailerUrl" ? "Trailer" : "Full film";
-          const accept = key === "posterUrl" ? "image/jpeg,image/png,image/webp" : "video/mp4,video/webm,video/quicktime";
-          return <div className="media-upload" key={key}>
-            {field(key, `${label} URL`, "https://… or upload below")}
-            <label className="file-picker"><span><Upload size={14} />{uploading[key] ? "Uploading…" : `Choose ${label.toLowerCase()} file`}</span><input type="file" accept={accept} disabled={uploading[key]} onChange={(event) => { void upload(key, event.currentTarget.files?.[0]); event.currentTarget.value = ""; }} /></label>
-            <small>{uploading[key] ? "Uploading and saving locally…" : form[key].startsWith("/uploads/") ? "Uploaded to this server." : key === "posterUrl" ? "JPEG, PNG, WebP · max 10 MB" : "MP4, WebM, QuickTime · max 500 MB"}</small>
-          </div>;
-        })}
-      </div><p className="form-hint">Uploaded files are stored locally in the Reel server's uploads folder.</p></section>
-      <div className="form-actions"><Link href="/creator/films" className="button button-glass">Cancel</Link><button className="button button-gold" disabled={busy || Object.values(uploading).some(Boolean)}><Upload size={15} />{busy ? "Publishing…" : "Publish film"}</button></div>
+    <form className="upload-form creator-upload-wizard" onSubmit={submit}>
+      <div className="panel form-panel wizard-panel"><CreatorWizardSteps steps={["Film details", "Add media", "Release settings", "Review & publish"]} current={step} />
+        {step === 0 && <section><p className="eyebrow">START WITH THE STORY</p><div className="form-grid">{field("title", "Film title", "A title worth remembering")}<label className="form-field"><span>Category</span><select required value={form.category} onChange={(e) => update("category", e.target.value)}><option value="">Choose a category</option>{(categories.data || []).map((category) => <option key={category.slug} value={category.slug}>{category.name}</option>)}</select></label><label className="form-field full"><span>Synopsis</span><textarea rows={5} required minLength={10} value={form.description} onChange={(e) => update("description", e.target.value)} placeholder="What is the story you want to tell?" /></label>{field("genre", "Genre", "Drama, Documentary…")}{field("region", "Country / region", "Ghana")}{field("language", "Language", "English, Swahili…")}</div></section>}
+        {step === 1 && <section><p className="eyebrow">BRING YOUR STORY TO LIFE</p><p className="reel-category-help">Upload a file directly or paste a link. You can add the full film now or return to it later in My Films.</p><div className="form-grid">
+          {(["posterUrl", "trailerUrl", "videoUrl"] as const).map((key) => {
+            const label = key === "posterUrl" ? "Poster image" : key === "trailerUrl" ? "Trailer" : "Full film";
+            const accept = key === "posterUrl" ? "image/jpeg,image/png,image/webp" : "video/mp4,video/webm,video/quicktime";
+            return <div className="media-upload" key={key}>
+              {field(key, `${label} link`, "https://…")}
+              <label className="file-picker"><span><Upload size={14} />{uploading === key ? "Uploading…" : `Choose ${label.toLowerCase()} file`}</span><input type="file" accept={accept} disabled={uploading !== null} onChange={(event) => { void upload(key, event.currentTarget.files?.[0]); event.currentTarget.value = ""; }} /></label>
+              <small>{key === "posterUrl" ? "JPEG, PNG, WebP · max 10 MB" : "MP4, WebM, QuickTime · max 500 MB"}</small>
+              {uploads[key] && <UploadFileStatus upload={uploads[key]} />}
+            </div>;
+          })}
+        </div><p className="form-hint">Large files may take a few minutes on mobile data. Keep this page open until the upload completes.</p></section>}
+        {step === 2 && <section><p className="eyebrow">HOW AUDIENCES CAN WATCH</p><div className="form-grid">
+          <label className="form-field"><span>Access model</span><select value={form.monetization} onChange={(e) => update("monetization", e.target.value)}><option value="subscription">Subscription</option><option value="free">Free</option><option value="ad_supported">Ad-supported</option><option value="pay_per_view">Pay per view</option></select></label>
+          {form.monetization === "pay_per_view" && field("price", "Ticket price (KES)", "500", "number")}
+          {field("director", "Director", "Director name")}{field("duration", "Runtime (minutes)", "e.g. 98", "number")}{field("cast", "Cast", "Names, separated by commas")}
+        </div></section>}
+        {step === 3 && <section className="upload-review"><p className="eyebrow">YOUR RELEASE</p><h2>{form.title}</h2><p>{form.description}</p><dl><div><dt>Category</dt><dd>{categories.data?.find((item) => item.slug === form.category)?.name || form.category}</dd></div><div><dt>Access</dt><dd>{form.monetization.replaceAll("_", " ")}{form.monetization === "pay_per_view" && form.price ? ` · KES ${form.price}` : ""}</dd></div><div><dt>Poster</dt><dd>{form.posterUrl ? uploads.posterUrl?.name || "Added" : "Not added"}</dd></div><div><dt>Trailer</dt><dd>{form.trailerUrl ? uploads.trailerUrl?.name || "Added" : "Not added"}</dd></div><div><dt>Full film</dt><dd>{form.videoUrl ? uploads.videoUrl?.name || "Added" : "Not added yet"}</dd></div></dl><p className="reel-category-help">Your release will be sent to the platform for review. You can manage it later from My Films.</p></section>}
+        <div className="form-actions wizard-actions">{step > 0 && <button type="button" className="button button-glass" onClick={() => setStep((current) => current - 1)}><ArrowLeft size={15} />Back</button>}{step === 0 && <Link href="/creator/films" className="button button-glass">Cancel</Link>}<button className="button button-gold" disabled={busy || uploading !== null}>{busy ? "Publishing…" : step === 3 ? "Submit release" : "Continue"}{step === 3 ? <Upload size={15} /> : <ArrowRight size={15} />}</button></div>
+      </div>
     </form>
   </CreatorLayout>;
 }
