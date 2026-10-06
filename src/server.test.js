@@ -335,6 +335,9 @@ describe("Reel Africa API", () => {
   });
   test("admin dashboard uses real accounts and verified payments and manages platform records", async () => {
     expect((await call("/admin/overview", "GET", undefined, null)).status).toBe(401);
+    const adminUsers = await data(await call("/admin/users?search=", "GET", undefined, adminCookie));
+    expect(Array.isArray(adminUsers.users)).toBe(true);
+    expect(adminUsers.total).toBeGreaterThan(0);
     const user = await data(await call("/auth/me", "GET", undefined, audienceCookie));
     const userId = user.user.id;
     const overviewBefore = await data(await call("/admin/overview", "GET", undefined, adminCookie));

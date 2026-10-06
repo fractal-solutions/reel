@@ -35,6 +35,7 @@ function Link({ href, children, className, ...props }: { href: string; children:
 
 function useLoad<T>(path: string | null) {
   const [data, setData] = useState<T | null>(null);
+  const [dataPath, setDataPath] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(Boolean(path));
   const [version, setVersion] = useState(0);
@@ -43,13 +44,17 @@ function useLoad<T>(path: string | null) {
     if (!path) {
       setLoading(false);
       setData(null);
+      setDataPath(null);
       setError("");
       return;
     }
     setLoading(true);
     setError("");
     api<T>(path).then((result) => {
-      if (active) setData(result);
+      if (active) {
+        setData(result);
+        setDataPath(path);
+      }
     }).catch((reason: unknown) => {
       if (active) setError(reason instanceof Error ? reason.message : "Unable to load this page.");
     }).finally(() => {
@@ -57,7 +62,7 @@ function useLoad<T>(path: string | null) {
     });
     return () => { active = false; };
   }, [path, version]);
-  return { data, error, loading, reload: () => setVersion((current) => current + 1) };
+  return { data: dataPath === path ? data : null, error, loading, reload: () => setVersion((current) => current + 1) };
 }
 
 function useRouter() {
@@ -1032,8 +1037,9 @@ function AdminOverview({ data, setSection, mutate }: { data: Record<string, unkn
 }
 
 function AdminUsers({ data, search, setSearch, mutate }: { data: { users: AdminUser[]; total: number } | null; search: string; setSearch: (value: string) => void; mutate: (path: string, method: string, body?: unknown) => Promise<void> }) {
+  const accounts = Array.isArray(data?.users) ? data.users : [];
   return <section className="panel"><div className="admin-toolbar"><label className="search-box"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name or email" /></label><span>{data?.total || 0} accounts</span></div>
-    {data?.users.length ? <div className="table-wrap"><table className="film-table"><thead><tr><th>Account</th><th>Role</th><th>Subscriptions</th><th>Created</th><th>Status</th><th /></tr></thead><tbody>{data.users.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small className="admin-subline">{account.email}</small></td><td>{account.role === "admin" ? "Admin" : <select aria-label={`Role for ${account.name}`} value={account.role} onChange={(event) => void mutate("admin/users", "PATCH", { userId: account.id, role: event.target.value })}><option value="audience">Audience</option><option value="creator">Creator</option></select>}</td><td>{account.activeSubscriptions}</td><td>{new Date(account.createdAt).toLocaleDateString()}</td><td><span className={`status-pill ${account.status === "active" ? "status-active" : "status-inactive"}`}>{account.status}</span></td><td>{account.role !== "admin" && <button className="text-button danger" onClick={() => void mutate("admin/users", "PATCH", { userId: account.id, status: account.status === "active" ? "suspended" : "active" })}>{account.status === "active" ? "Suspend" : "Reactivate"}</button>}</td></tr>)}</tbody></table></div> : <p className="muted panel-empty">No registered accounts match this search.</p>}
+    {accounts.length ? <div className="table-wrap"><table className="film-table"><thead><tr><th>Account</th><th>Role</th><th>Subscriptions</th><th>Created</th><th>Status</th><th /></tr></thead><tbody>{accounts.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small className="admin-subline">{account.email}</small></td><td>{account.role === "admin" ? "Admin" : <select aria-label={`Role for ${account.name}`} value={account.role} onChange={(event) => void mutate("admin/users", "PATCH", { userId: account.id, role: event.target.value })}><option value="audience">Audience</option><option value="creator">Creator</option></select>}</td><td>{account.activeSubscriptions}</td><td>{new Date(account.createdAt).toLocaleDateString()}</td><td><span className={`status-pill ${account.status === "active" ? "status-active" : "status-inactive"}`}>{account.status}</span></td><td>{account.role !== "admin" && <button className="text-button danger" onClick={() => void mutate("admin/users", "PATCH", { userId: account.id, status: account.status === "active" ? "suspended" : "active" })}>{account.status === "active" ? "Suspend" : "Reactivate"}</button>}</td></tr>)}</tbody></table></div> : <p className="muted panel-empty">No registered accounts match this search.</p>}
   </section>;
 }
 
