@@ -12,7 +12,7 @@ const asset = (file, contentType, cacheControl = "public, max-age=3600") => () =
 );
 const server = Bun.serve({
   hostname: process.env.HOST || "0.0.0.0",
-  port: Number(process.env.PORT || 3000),
+  port: Number(process.env.PORT || 4751),
   routes: {
     "/api/*": api,
     "/uploads/:filename": (request) => uploadedFileResponse(request.params.filename, undefined, request.headers.get("range")),
