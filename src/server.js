@@ -27,6 +27,22 @@ function clearSessionCookie(response) {
   headers.append("Set-Cookie", `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure}`);
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
+function isSameOriginRequest(request, requestUrl) {
+  const origin = request.headers.get("origin");
+  if (!origin) return true;
+  const host = request.headers.get("host");
+  if (!host) return false;
+  try {
+    const originUrl = new URL(origin);
+    const forwardedProtocol = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+    const protocol = forwardedProtocol ? `${forwardedProtocol}:` : requestUrl.protocol;
+    return ["http:", "https:"].includes(originUrl.protocol) &&
+      originUrl.host.toLowerCase() === host.toLowerCase() &&
+      originUrl.protocol === protocol;
+  } catch {
+    return false;
+  }
+}
 function publicUser(row) {
   return {
     id: asNumber(row.id),
@@ -398,8 +414,7 @@ export function createApiHandler(db, options = {}) {
     const path = url.pathname.slice(4).replace(/\/+$/, "") || "/";
     try {
       if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
-        const origin = request.headers.get("origin");
-        if (origin && origin !== url.origin)
+        if (!isSameOriginRequest(request, url))
           throw new HttpError(403, "Cross-origin requests are not allowed");
       }
       if (path === "/auth/register" && method === "POST") {

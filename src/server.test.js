@@ -11,10 +11,12 @@ let uploadDirectory;
 let creatorCookie;
 let audienceCookie;
 let adminCookie;
-async function call(path, method = "GET", body, cookie = creatorCookie) {
+async function call(path, method = "GET", body, cookie = creatorCookie, extraHeaders = {}) {
   const headers = new Headers();
   if (body !== undefined) headers.set("Content-Type", "application/json");
   if (cookie) headers.set("Cookie", cookie);
+  for (const [name, value] of Object.entries(extraHeaders))
+    headers.set(name, value);
   return api(new Request(`http://localhost/api${path}`, {
     method,
     headers,
@@ -71,6 +73,12 @@ describe("Reel Africa API", () => {
     expect((await call("/auth/register", "POST", {
       name: "Duplicate", email: "REAL-AUDIENCE@example.test", password: "LongEnoughPassword!", role: "audience"
     }, null)).status).toBe(409);
+    expect((await call("/auth/logout", "POST", undefined, null, {
+      Host: "192.168.100.81:3000", Origin: "http://192.168.100.81:3000"
+    })).status).toBe(204);
+    expect((await call("/auth/logout", "POST", undefined, null, {
+      Host: "192.168.100.81:3000", Origin: "http://attacker.example"
+    })).status).toBe(403);
     const logoutCookie = await cookieFrom(await call("/auth/register", "POST", {
       name: "Logout Test", email: "logout@example.test", password: "LogoutPassword123!", role: "audience"
     }, null));
