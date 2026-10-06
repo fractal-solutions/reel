@@ -68,7 +68,7 @@ Creators use **Creator Studio → Reel uploads** to select **Clips & trailers**,
 
 Plans are informational, and administrators can issue manual subscription entitlements. Checkout, payment-provider ingestion, verified live transactions, paid-access enforcement, creator payouts, account recovery, and email verification are not connected. Manual subscription grants are not payments. Revenue is reported only from successful verified transaction records; views are never used to estimate it.
 
-See [ROADMAP.md](./ROADMAP.md) for remaining launch requirements.
+See [ROADMAP.md](./ROADMAP.md) for remaining launch requirements and [WASM-VISION.md](./WASM-VISION.md) for an ambitious client-heavy architecture proposal focused on reducing origin workload.
 
 ## Validation
 
