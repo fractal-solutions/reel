@@ -32,11 +32,19 @@ bun run build
 bun start
 ```
 
+## Install as an app
+
+FilamuReel includes a web app manifest, Reel wordmark icons, and a service worker that caches the app shell and an offline page. API responses and uploaded media are deliberately not cached. Production deployments must use HTTPS (localhost is considered secure for development).
+
+On supported Android and desktop browsers, the install banner appears after a short delay when the browser signals that installation is available. On iPhone and iPad, use **Share → Add to Home Screen**; iOS does not provide the same automatic install prompt. The banner can be dismissed and won't be shown again in that browser profile.
+
 ## Accounts and roles
 
 - Audience and creator users can register, sign in, and sign out. Personal progress and watchlists are account-scoped.
 - Creators can manage their own films and view account-based playback analytics.
-- Administrators can manage real accounts, films, reviews, subscriptions, and plans; view platform analytics and the admin audit log.
+- Creators can upload videos directly to a selected Reel section from Creator Studio, optionally associate a published film, and track moderation status.
+- Creators can still submit a film's existing trailer from My Films.
+- Administrators can manage real accounts, films, Reel submissions, reviews, subscriptions, and plans; view platform analytics and the admin audit log.
 - Local demo accounts are excluded from platform analytics.
 - Production startup requires `ADMIN_PASSWORD` with at least 12 characters. Set `ADMIN_EMAIL` to change the bootstrap administrator email (default `admin@filamureel.local`). Configure these in the deployment environment, not in source control.
 
@@ -45,6 +53,10 @@ bun start
 Playback supports play/pause, seeking, resume/start over, saved progress, trailer tracking, custom FilamuReel loading/buffering UI, and a three-hour viewing prompt. Creator Studio accepts local JPEG, PNG, and WebP poster uploads up to 10 MB and MP4, WebM, and QuickTime video uploads up to 500 MB. Files are stored in `uploads/` (override with `UPLOAD_DIR`) and served by the same Bun server.
 
 Seeded films have no playable video sources; upload or configure media before end-to-end playback can be tested. Production media hosting, delivery, and transcoding are not configured.
+
+### The Reel
+
+Creators use **Creator Studio → Reel uploads** to select **Clips & trailers**, **Interviews**, **Podcasts**, or **Marketing**, then provide a media URL or upload the media file. Podcast uploads support audio (MP3, M4A, WAV, OGG, AAC; 100 MB max) or video (MP4, WebM, QuickTime; 500 MB max); the other sections accept video. A thumbnail is optional; a published film can optionally be linked, but is not required. The selected section controls where the content appears. **My films** also offers a shortcut to submit a film's existing trailer to Clips & trailers. All uploads stay private until an administrator previews and publishes them in **Admin → The Reel**; admins can reject, hide, and feature published entries. Audiences can browse in a grid or scroll-snap vertical feed, react (like, love, fire, wow), and rate clips from one to five stars. Reactions and ratings require a registered audience account; demo accounts are excluded from public aggregate counts.
 
 Plans are informational, and administrators can issue manual subscription entitlements. Checkout, payment-provider ingestion, verified live transactions, paid-access enforcement, creator payouts, account recovery, and email verification are not connected. Manual subscription grants are not payments. Revenue is reported only from successful verified transaction records; views are never used to estimate it.
 

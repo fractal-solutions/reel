@@ -31,7 +31,7 @@ beforeAll(async () => {
   db = new SQL(":memory:");
   await initializeDatabase(db);
   uploadDirectory = await mkdtemp(join(tmpdir(), "filamureel-test-"));
-  api = createApiHandler(db, { uploadDirectory, maxImageBytes: 8, maxVideoBytes: 16 });
+  api = createApiHandler(db, { uploadDirectory, maxImageBytes: 8, maxVideoBytes: 16, maxAudioBytes: 8 });
   creatorCookie = await cookieFrom(await call("/auth/login", "POST", {
     email: "creator@filamureel.local", password: "ReelCreator2026!"
   }, null));
@@ -199,6 +199,21 @@ describe("Reel Africa API", () => {
     expect(partial.status).toBe(206);
     expect(partial.headers.get("Content-Range")).toBe("bytes 1-3/6");
     expect([...new Uint8Array(await partial.arrayBuffer())]).toEqual([2, 3, 4]);
+    const audioUpload = await api(new Request("http://localhost/api/uploads", {
+      method: "POST",
+      headers: { "Content-Type": "audio/mpeg", Cookie: creatorCookie },
+      body: new Uint8Array([1, 2, 3, 4, 5, 6])
+    }));
+    expect(audioUpload.status).toBe(200);
+    const audioFile = (await data(audioUpload)).url.split("/").at(-1);
+    expect(audioFile).toMatch(/^[\da-f-]{36}\.mp3$/);
+    expect((await uploadedFileResponse(audioFile, uploadDirectory)).headers.get("Content-Type")).toBe("audio/mpeg");
+    const oversizedAudio = await api(new Request("http://localhost/api/uploads", {
+      method: "POST",
+      headers: { "Content-Type": "audio/mpeg", Cookie: creatorCookie },
+      body: new Uint8Array(9)
+    }));
+    expect(oversizedAudio.status).toBe(413);
     expect((await uploadedFileResponse("../not-a-file.png", uploadDirectory)).status).toBe(404);
   });
   test("creates reviews and recalculates film score", async () => {
@@ -229,6 +244,79 @@ describe("Reel Africa API", () => {
     expect(updated.status).toBe("draft");
     expect((await call(`/films/${created.id}`, "DELETE")).status).toBe(204);
     expect((await call(`/films/${created.id}`)).status).toBe(404);
+  });
+  test("submits creator trailers for moderation and persists audience reactions and ratings", async () => {
+    const film = await data(await call("/films", "POST", {
+      title: "Reel Workflow Test",
+      monetization: "free",
+      trailerUrl: "https://media.example.test/reel-workflow.mp4",
+      posterUrl: "https://media.example.test/reel-workflow.jpg"
+    }));
+    const submitted = await call("/creator/reel-submissions", "POST", { filmId: film.id });
+    expect(submitted.status).toBe(201);
+    const submission = await data(submitted);
+    expect(submission.status).toBe("pending");
+    expect((await data(await call("/reel-items"))).some((item) => item.id === submission.id)).toBe(false);
+    expect((await data(await call("/creator/reel-submissions"))).some((item) => item.id === submission.id)).toBe(true);
+    expect((await call("/reel-items/999999/reaction", "PUT", { reaction: "like" }, audienceCookie)).status).toBe(404);
+    expect((await call("/admin/reel-items", "GET", undefined, creatorCookie)).status).toBe(403);
+    const reviewList = await data(await call("/admin/reel-items", "GET", undefined, adminCookie));
+    expect(reviewList.find((item) => item.id === submission.id)?.status).toBe("pending");
+    expect((await call(`/admin/reel-items/${submission.id}`, "PATCH", { status: "published" }, adminCookie)).status).toBe(200);
+    expect((await data(await call("/reel-items?category=clips"))).some((item) => item.id === submission.id)).toBe(true);
+    expect((await call(`/reel-items/${submission.id}/reaction`, "PUT", { reaction: "bogus" }, audienceCookie)).status).toBe(400);
+    expect((await call(`/reel-items/${submission.id}/rating`, "PUT", { rating: 6 }, audienceCookie)).status).toBe(400);
+    expect((await call(`/reel-items/${submission.id}/reaction`, "PUT", { reaction: "love" }, null)).status).toBe(401);
+    expect((await call(`/reel-items/${submission.id}/reaction`, "PUT", { reaction: "love" }, audienceCookie)).status).toBe(200);
+    expect((await call(`/reel-items/${submission.id}/reaction`, "PUT", { reaction: "fire" }, audienceCookie)).status).toBe(200);
+    expect((await call(`/reel-items/${submission.id}/rating`, "PUT", { rating: 4 }, audienceCookie)).status).toBe(200);
+    expect((await call(`/reel-items/${submission.id}/rating`, "PUT", { rating: 5 }, audienceCookie)).status).toBe(200);
+    const published = (await data(await call("/reel-items", "GET", undefined, audienceCookie))).find((item) => item.id === submission.id);
+    expect(published?.reactionCount).toBe(1);
+    expect(published?.myReaction).toBe("fire");
+    expect(published?.ratingCount).toBe(1);
+    expect(published?.averageRating).toBe(5);
+    expect((await call(`/reel-items/${submission.id}/reaction`, "DELETE", undefined, audienceCookie)).status).toBe(204);
+    expect((await call(`/reel-items/${submission.id}/rating`, "DELETE", undefined, audienceCookie)).status).toBe(204);
+    expect((await call(`/admin/reel-items/${submission.id}`, "PATCH", { status: "hidden" }, adminCookie)).status).toBe(200);
+    expect((await data(await call("/reel-items"))).some((item) => item.id === submission.id)).toBe(false);
+    expect((await call(`/admin/reel-items/${submission.id}`, "PATCH", { status: "rejected" }, adminCookie)).status).toBe(200);
+    expect((await call("/creator/reel-submissions", "POST", { filmId: film.id })).status).toBe(200);
+    expect((await data(await call("/creator/reel-submissions"))).find((item) => item.id === submission.id)?.status).toBe("pending");
+    expect((await call(`/films/${film.id}`, "DELETE")).status).toBe(204);
+  });
+  test("submits standalone Reel media to the creator-selected section", async () => {
+    const submitted = await call("/creator/reel-submissions", "POST", {
+      category: "podcasts",
+      mediaType: "audio",
+      title: "Stories Behind the Screen",
+      description: "A conversation with emerging filmmakers.",
+      videoUrl: "/uploads/filmmaker-podcast.mp4",
+      posterUrl: "/uploads/podcast-cover.webp"
+    });
+    expect(submitted.status).toBe(201);
+    const { id } = await data(submitted);
+    expect((await call("/creator/reel-submissions", "POST", {
+      category: "unexpected", title: "Invalid", videoUrl: "/uploads/invalid.mp4"
+    })).status).toBe(400);
+    expect((await call("/creator/reel-submissions", "POST", {
+      category: "interviews", title: "Missing media"
+    })).status).toBe(400);
+    expect((await call(`/admin/reel-items/${id}`, "PATCH", { status: "published" }, adminCookie)).status).toBe(200);
+    const podcasts = await data(await call("/reel-items?category=podcasts"));
+    expect(podcasts.some((item) => item.id === id && item.filmId === null && item.filmTitle === null && item.mediaType === "audio")).toBe(true);
+    expect((await data(await call("/reel-items?category=interviews"))).some((item) => item.id === id)).toBe(false);
+    expect((await call(`/reel-items/${id}/reaction`, "PUT", { reaction: "love" }, audienceCookie)).status).toBe(200);
+    expect((await call("/creator/reel-submissions", "POST", {
+      category: "interviews", mediaType: "audio", title: "Bad format", videoUrl: "/uploads/bad.mp3"
+    })).status).toBe(400);
+    const linked = await data(await call("/creator/reel-submissions", "POST", {
+      category: "interviews", title: "Cast conversation", videoUrl: "/uploads/interview.mp4", filmId: 1
+    }));
+    expect(linked.status).toBe("pending");
+    expect((await data(await call("/creator/reel-submissions"))).find((item) => item.id === linked.id)).toMatchObject({
+      category: "interviews", filmId: 1, filmTitle: "The Last Baobab"
+    });
   });
   test("keeps creator endpoints on the seeded identity and validates withdrawals", async () => {
     const creatorFilms = await data(await call("/creator/films"));
@@ -317,6 +405,49 @@ describe("Reel Africa API", () => {
       expect(columns.map((column) => column.name)).toContain("media_type");
       const [film] = await legacyDb.unsafe("SELECT view_count FROM films WHERE id=1");
       expect(film.view_count).toBe(0);
+    } finally {
+      await legacyDb.close();
+    }
+  });
+  test("migrates linked Reel trailers to optional film associations without losing engagement", async () => {
+    const legacyDb = new SQL(":memory:");
+    try {
+      await initializeDatabase(legacyDb);
+      await legacyDb.unsafe("PRAGMA foreign_keys = OFF");
+      await legacyDb.unsafe("DROP TABLE reel_ratings");
+      await legacyDb.unsafe("DROP TABLE reel_reactions");
+      await legacyDb.unsafe("DROP TABLE reel_items");
+      await legacyDb.unsafe(`CREATE TABLE reel_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, film_id INTEGER NOT NULL UNIQUE REFERENCES films(id) ON DELETE CASCADE,
+        creator_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        category TEXT NOT NULL DEFAULT 'clips' CHECK (category IN ('clips','interviews','podcasts','marketing')),
+        title TEXT NOT NULL, description TEXT, video_url TEXT NOT NULL, poster_url TEXT,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','published','hidden','rejected')),
+        is_featured INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      )`);
+      const now = new Date().toISOString();
+      const [item] = await legacyDb.unsafe(`INSERT INTO reel_items (film_id,creator_id,title,video_url,status,created_at,updated_at)
+        VALUES (1,1,'Legacy trailer','/uploads/legacy.mp4','published',?,?) RETURNING id`, [now, now]);
+      await legacyDb.unsafe(`CREATE TABLE reel_reactions (
+        reel_item_id INTEGER NOT NULL REFERENCES reel_items(id) ON DELETE CASCADE,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        reaction TEXT NOT NULL CHECK (reaction IN ('like','love','fire','wow')),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
+        PRIMARY KEY (reel_item_id,user_id))`);
+      await legacyDb.unsafe(`CREATE TABLE reel_ratings (
+        reel_item_id INTEGER NOT NULL REFERENCES reel_items(id) ON DELETE CASCADE,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
+        PRIMARY KEY (reel_item_id,user_id))`);
+      await legacyDb.unsafe("INSERT INTO reel_reactions VALUES (?,2,'love',?,?)", [item.id, now, now]);
+      await legacyDb.unsafe("INSERT INTO reel_ratings VALUES (?,2,5,?,?)", [item.id, now, now]);
+      await legacyDb.unsafe("PRAGMA foreign_keys = ON");
+      await initializeDatabase(legacyDb);
+      const columns = await legacyDb.unsafe("PRAGMA table_info(reel_items)");
+      expect(columns.find((column) => column.name === "film_id")?.notnull).toBe(0);
+      expect((await legacyDb.unsafe("SELECT reaction FROM reel_reactions WHERE reel_item_id=?", [item.id]))[0]?.reaction).toBe("love");
+      expect((await legacyDb.unsafe("SELECT rating FROM reel_ratings WHERE reel_item_id=?", [item.id]))[0]?.rating).toBe(5);
+      expect(await legacyDb.unsafe("PRAGMA foreign_key_check")).toEqual([]);
+      await legacyDb.unsafe(`INSERT INTO reel_items (creator_id,category,title,video_url,status,created_at,updated_at)
+        VALUES (1,'interviews','Standalone','/uploads/interview.mp4','pending',?,?)`, [now, now]);
+      await initializeDatabase(legacyDb);
     } finally {
       await legacyDb.close();
     }

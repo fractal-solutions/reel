@@ -11,6 +11,11 @@
 - Analytics use persisted account, playback, review, and subscription data. Demo activity is excluded; revenue counts only verified successful transactions.
 - Film playback controls, resume/start over, progress saves, trailer tracking, branded loading/buffering state, and the three-hour viewing prompt.
 - Local media uploads.
+- Creator-submitted trailers in The Reel, with admin preview, moderation, publishing, hiding, and featuring.
+- Direct creator video submissions to all four Reel sections, with optional film association and per-upload section selection.
+- Public Reel grid and mobile-first vertical scroll-snap feed with muted visibility autoplay.
+- Audience reactions and one-to-five-star ratings with account-scoped updates and aggregate counts.
+- PWA manifest, Reel-branded install icons, service-worker app-shell/offline fallback, and browser-aware install guidance.
 
 ## Remaining priorities
 
@@ -41,6 +46,13 @@
 - [ ] Add captions and complete keyboard/screen-reader support.
 - [ ] Decide on autoplay-next and adaptive streaming.
 - [ ] Harden playback analytics against client-side manipulation; define active-user periods and any regional analytics with a privacy purpose.
+- [ ] Test install, updates, and offline fallback on physical Android, iOS, and desktop devices; offline video playback is not supported.
+
+### The Reel follow-up
+
+- [ ] Add moderation guidance, rights attestations, and a submission takedown process.
+- [ ] Test vertical feed behavior on real mobile browsers, including autoplay restrictions, reduced motion, and data-saver preferences.
+- [ ] Add richer engagement reporting and moderation tools if required; current audience actions are one reaction and one rating per account per video.
 
 ## Launch blockers
 

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#0b1110"/>
+  <path d="M256 36C445 36 476 67 476 256C476 445 445 476 256 476C67 476 36 445 36 256C36 67 67 36 256 36Z" fill="#111a17" stroke="#c7a86c" stroke-width="8"/>
+  <text x="256" y="293" fill="#e2c991" font-family="'Playfair Display', Georgia, serif" font-size="142" font-style="italic" font-weight="500" letter-spacing="-8" text-anchor="middle">Reel</text>
+</svg>

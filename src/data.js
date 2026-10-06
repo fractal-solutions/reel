@@ -105,6 +105,26 @@ const schema = [
     id INTEGER PRIMARY KEY AUTOINCREMENT, admin_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id INTEGER, created_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS reel_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, film_id INTEGER REFERENCES films(id) ON DELETE SET NULL,
+    creator_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    category TEXT NOT NULL DEFAULT 'clips' CHECK (category IN ('clips','interviews','podcasts','marketing')),
+    title TEXT NOT NULL, description TEXT, video_url TEXT NOT NULL, media_type TEXT NOT NULL DEFAULT 'video' CHECK (media_type IN ('video','audio')), poster_url TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','published','hidden','rejected')),
+    is_featured INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS reel_reactions (
+    reel_item_id INTEGER NOT NULL REFERENCES reel_items(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    reaction TEXT NOT NULL CHECK (reaction IN ('like','love','fire','wow')),
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (reel_item_id,user_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS reel_ratings (
+    reel_item_id INTEGER NOT NULL REFERENCES reel_items(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (reel_item_id,user_id)
+  )`,
   `CREATE INDEX IF NOT EXISTS films_status_created ON films(status, created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS films_creator ON films(creator_id)`,
   `CREATE INDEX IF NOT EXISTS films_genre ON films(genre)`,
@@ -114,6 +134,10 @@ const schema = [
   `CREATE INDEX IF NOT EXISTS viewing_events_film ON viewing_events(film_id,started_at DESC)`,
   `CREATE INDEX IF NOT EXISTS sessions_token_hash ON sessions(token_hash)`,
   `CREATE INDEX IF NOT EXISTS subscriptions_user_status ON subscriptions(user_id,status)`,
+  `CREATE INDEX IF NOT EXISTS reel_items_status_category ON reel_items(status,category,created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS reel_items_film ON reel_items(film_id)`,
+  `CREATE INDEX IF NOT EXISTS reel_reactions_item ON reel_reactions(reel_item_id,reaction)`,
+  `CREATE INDEX IF NOT EXISTS reel_ratings_item ON reel_ratings(reel_item_id)`,
   `CREATE INDEX IF NOT EXISTS transactions_status_created ON transactions(status,created_at DESC)`
 ];
 const seededCategories = [
@@ -304,6 +328,42 @@ async function addColumnIfMissing(db, table, column, definition) {
   if (!columns.some((item) => item.name === column))
     await db.unsafe(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
+async function migrateReelItems(db) {
+  const columns = await db.unsafe("PRAGMA table_info(reel_items)");
+  const filmColumn = columns.find((column) => column.name === "film_id");
+  const indexes = await db.unsafe("PRAGMA index_list(reel_items)");
+  const hasFilmUnique = indexes.some((index) => index.unique);
+  if (!filmColumn?.notnull && !hasFilmUnique)
+    return;
+  await db.unsafe("PRAGMA foreign_keys = OFF");
+  try {
+    await db.unsafe("BEGIN IMMEDIATE");
+    await db.unsafe(`CREATE TABLE reel_items_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      film_id INTEGER REFERENCES films(id) ON DELETE SET NULL,
+      creator_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      category TEXT NOT NULL DEFAULT 'clips' CHECK (category IN ('clips','interviews','podcasts','marketing')),
+      title TEXT NOT NULL, description TEXT, video_url TEXT NOT NULL,
+      media_type TEXT NOT NULL DEFAULT 'video' CHECK (media_type IN ('video','audio')), poster_url TEXT,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','published','hidden','rejected')),
+      is_featured INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    )`);
+    await db.unsafe(`INSERT INTO reel_items_new
+      (id,film_id,creator_id,category,title,description,video_url,media_type,poster_url,status,is_featured,created_at,updated_at)
+      SELECT id,film_id,creator_id,category,title,description,video_url,'video',poster_url,status,is_featured,created_at,updated_at
+      FROM reel_items`);
+    await db.unsafe("DROP TABLE reel_items");
+    await db.unsafe("ALTER TABLE reel_items_new RENAME TO reel_items");
+    await db.unsafe("CREATE INDEX IF NOT EXISTS reel_items_status_category ON reel_items(status,category,created_at DESC)");
+    await db.unsafe("CREATE INDEX IF NOT EXISTS reel_items_film ON reel_items(film_id)");
+    await db.unsafe("COMMIT");
+  } catch (error) {
+    await db.unsafe("ROLLBACK");
+    throw error;
+  } finally {
+    await db.unsafe("PRAGMA foreign_keys = ON");
+  }
+}
 async function seedAccountPassword(db, email, password) {
   const accounts = await db.unsafe("SELECT id FROM users WHERE email=? AND password_hash IS NULL", [email]);
   if (!accounts.length)
@@ -317,6 +377,8 @@ export async function initializeDatabase(db, options = {}) {
   await db`PRAGMA foreign_keys = ON`;
   for (const statement of schema)
     await db.unsafe(statement);
+  await migrateReelItems(db);
+  await addColumnIfMissing(db, "reel_items", "media_type", "TEXT NOT NULL DEFAULT 'video' CHECK (media_type IN ('video','audio'))");
   await addColumnIfMissing(db, "users", "password_hash", "TEXT");
   await addColumnIfMissing(db, "users", "account_status", "TEXT NOT NULL DEFAULT 'active'");
   await addColumnIfMissing(db, "users", "is_demo", "INTEGER NOT NULL DEFAULT 0");

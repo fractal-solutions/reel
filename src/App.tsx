@@ -2,8 +2,8 @@ import { createContext, useContext, useEffect, useRef, useState, type AnchorHTML
 import {
   ArrowLeft, ArrowRight, ArrowUpRight, Award, BarChart3, Bookmark,
   Check, ChevronLeft, ChevronRight, CircleDollarSign, Clapperboard, Clock3, Compass,
-  Film as FilmIcon, FastForward, Globe2, House, LayoutDashboard, LoaderCircle, Maximize, Menu, MessageCircle,
-  Pause, Play, Plus, Rewind, Search, Send, Settings2, Share2, Star, Ticket, TrendingUp, Trophy, Upload, Volume2,
+  Download, Film as FilmIcon, FastForward, Flame, Globe2, Grid2X2, Heart, House, LayoutDashboard, LoaderCircle, Maximize, Menu, MessageCircle,
+  Pause, Play, Plus, Rewind, Search, Send, Settings2, Share2, Smartphone, Star, Ticket, ThumbsUp, TrendingUp, Trophy, Upload, Volume2,
   VolumeX, Wallet, X, Eye, Users, ShieldCheck, CreditCard, ClipboardList, LogOut, Activity,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -15,6 +15,10 @@ const RouterContext = createContext<Router>({ path: "/", navigate: () => undefin
 type AccountUser = { id: number; name: string; email: string; role: "audience" | "creator" | "admin"; status: string; isDemo: boolean };
 type AuthState = { user: AccountUser | null; loading: boolean; refresh: () => Promise<void>; signOut: () => Promise<void> };
 const AuthContext = createContext<AuthState>({ user: null, loading: true, refresh: async () => undefined, signOut: async () => undefined });
+type BrowserInstallPrompt = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+};
 
 function Link({ href, children, className, ...props }: { href: string; children: ReactNode; className?: string } & AnchorHTMLAttributes<HTMLAnchorElement>) {
   const { navigate } = useContext(RouterContext);
@@ -25,6 +29,7 @@ function Link({ href, children, className, ...props }: { href: string; children:
       event.preventDefault();
       navigate(href);
     }
+
   }}>{children}</a>;
 }
 
@@ -101,6 +106,11 @@ export function App() {
   useEffect(() => {
     void refreshAuth().catch(() => setAuthLoading(false));
   }, []);
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    void navigator.serviceWorker.register("/sw.js")
+      .catch((error: unknown) => console.error("Unable to register the FilamuReel service worker.", error));
+  }, []);
   const route = path.split("?")[0] || "/";
   let page: ReactNode;
   if (route === "/") page = <Home />;
@@ -114,6 +124,7 @@ export function App() {
   else if (route === "/admin") page = <AdminDashboard />;
   else if (route === "/creator" || route === "/creator/") page = <RequireRole role="creator"><CreatorDashboard /></RequireRole>;
   else if (route === "/creator/films") page = <RequireRole role="creator"><CreatorFilms /></RequireRole>;
+  else if (route === "/creator/reel") page = <RequireRole role="creator"><CreatorReel /></RequireRole>;
   else if (route === "/creator/upload") page = <RequireRole role="creator"><UploadFilm /></RequireRole>;
   else if (route === "/creator/analytics") page = <RequireRole role="creator"><CreatorAnalytics /></RequireRole>;
   else if (route === "/creator/earnings") page = <RequireRole role="creator"><CreatorEarnings /></RequireRole>;
@@ -121,7 +132,7 @@ export function App() {
 
   return <RouterContext.Provider value={{ path, navigate }}>
     <AuthContext.Provider value={{ user, loading: authLoading, refresh: refreshAuth, signOut }}>
-    <div className="app-shell"><Header />{page}<Footer /></div>
+    <div className="app-shell"><Header />{page}<Footer /><PwaInstallPrompt /></div>
     </AuthContext.Provider>
   </RouterContext.Provider>;
 }
@@ -135,7 +146,7 @@ function Header() {
   const nav = admin
     ? [{ to: "/admin", label: "Admin", icon: ShieldCheck }]
     : creator
-    ? [{ to: "/creator", label: "Overview", icon: LayoutDashboard }, { to: "/creator/films", label: "My films", icon: Clapperboard }, { to: "/creator/analytics", label: "Analytics", icon: BarChart3 }, { to: "/creator/earnings", label: "Earnings", icon: Wallet }]
+    ? [{ to: "/creator", label: "Overview", icon: LayoutDashboard }, { to: "/creator/films", label: "My films", icon: Clapperboard }, { to: "/creator/reel", label: "Reel uploads", icon: Play }, { to: "/creator/analytics", label: "Analytics", icon: BarChart3 }, { to: "/creator/earnings", label: "Earnings", icon: Wallet }]
     : [{ to: "/", label: "Home", icon: House }, { to: "/browse", label: "Explore", icon: Compass }, { to: "/reel", label: "The Reel", icon: FilmIcon }, { to: "/watchlist", label: "Watchlist", icon: Bookmark }];
   return <header className="site-header">
     <div className="nav-wrap">
@@ -157,6 +168,60 @@ function Header() {
 
 function Footer() {
   return <footer className="site-footer"><Link href="/" className="brand"><span className="brand-mark"><FilmIcon size={17} /></span><span>Filamu<span className="brand-accent">Reel</span></span></Link><p>A home for stories born across Africa.</p><span className="footer-copy">© {new Date().getFullYear()} FilamuReel</span></footer>;
+}
+
+function PwaInstallPrompt() {
+  const [installPrompt, setInstallPrompt] = useState<BrowserInstallPrompt | null>(null);
+  const [showBanner, setShowBanner] = useState(false);
+  const [iosInstall, setIosInstall] = useState(false);
+  useEffect(() => {
+    const installed = window.matchMedia("(display-mode: standalone)").matches ||
+      Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
+    const dismissed = localStorage.getItem("filamureel-install-dismissed-v1") === "true";
+    if (installed || dismissed) return;
+    const isIos = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    let timer: number | undefined;
+    const onBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as BrowserInstallPrompt);
+      timer = window.setTimeout(() => setShowBanner(true), 7000);
+    };
+    const onAppInstalled = () => {
+      setShowBanner(false);
+      setInstallPrompt(null);
+    };
+    if (isIos) {
+      setIosInstall(true);
+      timer = window.setTimeout(() => setShowBanner(true), 7000);
+    }
+    window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt);
+    window.addEventListener("appinstalled", onAppInstalled);
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      window.removeEventListener("beforeinstallprompt", onBeforeInstallPrompt);
+      window.removeEventListener("appinstalled", onAppInstalled);
+    };
+  }, []);
+  const dismiss = () => {
+    localStorage.setItem("filamureel-install-dismissed-v1", "true");
+    setShowBanner(false);
+  };
+  const install = async () => {
+    if (!installPrompt) return;
+    await installPrompt.prompt();
+    const choice = await installPrompt.userChoice;
+    setInstallPrompt(null);
+    if (choice.outcome === "accepted") setShowBanner(false);
+  };
+  if (!showBanner || (!installPrompt && !iosInstall)) return null;
+  return <aside className="pwa-install-banner" aria-label="Install FilamuReel">
+    <div className="pwa-install-topline"><span className="pwa-install-icon"><img src="/icons/reel.svg" alt="" width="52" height="52" /></span><span className="eyebrow">FILAMUREEL · YOUR CINEMA</span><button className="pwa-install-dismiss" onClick={dismiss} aria-label="Dismiss install prompt"><X size={17} /></button></div>
+    <div className="pwa-install-copy"><strong>Your cinema,<br />one tap away.</strong><span>{iosInstall && !installPrompt ? "Add FilamuReel to your Home Screen for a focused, app-like experience." : "Install FilamuReel for quick access to stories from across Africa."}</span></div>
+    {installPrompt
+      ? <button className="button button-gold pwa-install-action" onClick={() => void install()}><Download size={15} />Install FilamuReel</button>
+      : iosInstall && <div className="pwa-ios-steps"><span>1</span><Share2 size={15} /><strong>Share</strong><ArrowRight size={13} /><span>2</span><strong>Add to Home Screen</strong></div>}
+  </aside>;
 }
 
 function PageFrame({ children, wide = false, className = "" }: { children: ReactNode; wide?: boolean; className?: string }) {
@@ -862,7 +927,7 @@ function AccountPage() {
   </div></PageFrame>;
 }
 
-type AdminSection = "overview" | "users" | "films" | "reviews" | "subscriptions" | "transactions" | "plans" | "audit";
+type AdminSection = "overview" | "users" | "films" | "reel" | "reviews" | "subscriptions" | "transactions" | "plans" | "audit";
 function AdminDashboard() {
   const { user, loading: authLoading } = useContext(AuthContext);
   const [section, setSection] = useState<AdminSection>("overview");
@@ -873,6 +938,7 @@ function AdminDashboard() {
   const endpoint = section === "overview" ? "admin/overview"
     : section === "users" ? `admin/users?${searchQuery}`
       : section === "films" ? "admin/films"
+      : section === "reel" ? "admin/reel-items"
       : section === "reviews" ? "admin/reviews"
         : section === "subscriptions" ? "admin/subscriptions"
           : section === "transactions" ? "admin/transactions"
@@ -894,7 +960,7 @@ function AdminDashboard() {
   if (user?.role !== "admin") return <PageFrame><EmptyState title="Administrator access required" message="Sign in with an administrator account to view platform management." href="/account" action="Sign in" /></PageFrame>;
   const sections: { id: AdminSection; label: string; icon: typeof Activity }[] = [
     { id: "overview", label: "Overview", icon: Activity }, { id: "users", label: "Accounts", icon: Users },
-    { id: "films", label: "Films", icon: FilmIcon },
+    { id: "films", label: "Films", icon: FilmIcon }, { id: "reel", label: "The Reel", icon: Play },
     { id: "reviews", label: "Reviews", icon: MessageCircle }, { id: "subscriptions", label: "Subscriptions", icon: CreditCard },
     { id: "transactions", label: "Transactions", icon: CircleDollarSign }, { id: "plans", label: "Plans", icon: Ticket },
     { id: "audit", label: "Admin log", icon: ClipboardList }
@@ -906,6 +972,7 @@ function AdminDashboard() {
       {state.loading ? <Loading label="Loading platform data…" /> : section === "overview" ? <AdminOverview data={overview} setSection={setSection} mutate={mutate} />
         : section === "users" ? <AdminUsers data={state.data as { users: AdminUser[]; total: number } | null} search={search} setSearch={setSearch} mutate={mutate} />
           : section === "films" ? <AdminFilms data={state.data as Film[] | null} mutate={mutate} />
+            : section === "reel" ? <AdminReel data={state.data as AdminReelItem[] | null} mutate={mutate} />
           : section === "reviews" ? <AdminReviews data={state.data as AdminReview[] | null} mutate={mutate} />
             : section === "subscriptions" ? <AdminSubscriptions data={state.data as AdminSubscription[] | null} mutate={mutate} />
               : section === "transactions" ? <AdminTransactions data={state.data as AdminTransaction[] | null} />
@@ -921,6 +988,7 @@ type AdminSubscription = { id: number; userId: number; userName: string; email: 
 type AdminTransaction = { id: number; userName: string | null; provider: string; providerReference: string; type: string; amount: number; currency: string; status: string; verifiedAt: string | null; createdAt: string };
 type AdminPlan = { id: number; name: string; priceMonthly: number; priceAnnual: number; features: string[]; isPopular: boolean };
 type AdminAuditEntry = { id: number; action: string; entityType: string; entityId: number | null; adminName: string; createdAt: string };
+type AdminReelItem = ReelItem & { status: "pending" | "published" | "hidden" | "rejected"; createdAt: string };
 
 function AdminOverview({ data, setSection, mutate }: { data: Record<string, unknown>; setSection: (section: AdminSection) => void; mutate: (path: string, method: string, body?: unknown) => Promise<void> }) {
   const reviews = Array.isArray(data.recentReviews) ? data.recentReviews as (AdminReview & { id: number })[] : [];
@@ -1040,7 +1108,19 @@ function AdminAudit({ data }: { data: AdminAuditEntry[] | null }) {
   </section>;
 }
 
-function ReelPage() {
+function AdminReel({ data, mutate }: { data: AdminReelItem[] | null; mutate: (path: string, method: string, body?: unknown) => Promise<void> }) {
+  return <section className="panel"><div className="panel-heading"><div><p className="eyebrow">CREATOR SUBMISSIONS</p><h2>Review The Reel</h2></div></div>
+    {data?.length ? <div className="table-wrap"><table className="film-table"><thead><tr><th>Content</th><th>Section</th><th>Creator</th><th>Related film</th><th>Status</th><th>Featured</th><th><span className="sr-only">Actions</span></th></tr></thead>
+      <tbody>{data.map((item) => <tr key={item.id}><td><strong>{item.title}</strong>{item.mediaType === "audio" ? <audio className="reel-admin-preview" src={item.videoUrl} controls preload="metadata" /> : <video className="reel-admin-preview" src={item.videoUrl} poster={item.posterUrl || undefined} controls preload="metadata" />}</td><td>{reelCategories.find((category) => category.id === item.category)?.label || item.category}</td><td>{item.creatorName}</td><td>{item.filmTitle || "Standalone"}</td><td><span className="status-pill">{item.status}</span></td><td>{item.isFeatured ? "Yes" : "No"}</td>
+        <td className="reel-admin-actions">{item.status !== "published" && <button className="text-button" onClick={() => void mutate(`admin/reel-items/${item.id}`, "PATCH", { status: "published" })}>Publish</button>}
+          {item.status !== "rejected" && <button className="text-button danger" onClick={() => void mutate(`admin/reel-items/${item.id}`, "PATCH", { status: "rejected" })}>Reject</button>}
+          {item.status === "published" && <button className="text-button" onClick={() => void mutate(`admin/reel-items/${item.id}`, "PATCH", { status: "hidden" })}>Hide</button>}
+          {item.status === "published" && <button className="text-button" onClick={() => void mutate(`admin/reel-items/${item.id}`, "PATCH", { isFeatured: !item.isFeatured })}>{item.isFeatured ? "Unfeature" : "Feature"}</button>}
+        </td></tr>)}</tbody></table></div> : <p className="muted panel-empty">No Reel content has been submitted for review.</p>}
+  </section>;
+}
+
+function LegacyReelPage() {
   type ReelCategory = "Clips" | "Interviews" | "Podcasts" | "Marketing";
   type ReelSection = { title: string; description: string; items: [string, string, string, string, string][] };
   const [activeTab, setActiveTab] = useState<ReelCategory>("Clips");
@@ -1097,8 +1177,122 @@ function ReelPage() {
   </PageFrame>;
 }
 
+type ReelCategory = "clips" | "interviews" | "podcasts" | "marketing";
+type ReelItem = {
+  id: number; filmId: number | null; category: ReelCategory; title: string; description: string | null;
+  videoUrl: string; mediaType: "video" | "audio"; posterUrl: string | null; filmTitle: string | null; creatorName: string;
+  isFeatured: boolean; reactionCount: number; ratingCount: number; averageRating: number | null;
+  myReaction: string | null; myRating: number | null;
+};
+const reelCategories: { id: ReelCategory; label: string }[] = [
+  { id: "clips", label: "Clips & trailers" }, { id: "interviews", label: "Interviews" },
+  { id: "podcasts", label: "Podcasts" }, { id: "marketing", label: "Marketing" },
+];
+const reelReactions = [
+  { id: "like", label: "Like", icon: ThumbsUp },
+  { id: "love", label: "Love", icon: Heart },
+  { id: "fire", label: "Fire", icon: Flame },
+  { id: "wow", label: "Wow", icon: Star },
+];
+
+function ReelMedia({ item, vertical }: { item: ReelItem; vertical: boolean }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const tracked = useRef(false);
+  const [trackingError, setTrackingError] = useState("");
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !vertical || item.mediaType === "audio") return;
+    video.muted = true;
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      if (entry.isIntersecting && entry.intersectionRatio >= .7) {
+        void video.play().catch(() => setTrackingError("Tap play to watch this clip."));
+      } else {
+        video.pause();
+      }
+    }, { threshold: [.2, .7] });
+    observer.observe(video);
+    return () => { observer.disconnect(); video.pause(); };
+  }, [item.mediaType, vertical]);
+  const trackPlay = () => {
+    if (!item.filmId) return;
+    if (tracked.current) return;
+    tracked.current = true;
+    setTrackingError("");
+    void api(`films/${item.filmId}/view`, {
+      method: "POST", body: JSON.stringify({ mediaType: "trailer" }),
+    }).catch((error: unknown) => {
+      tracked.current = false;
+      setTrackingError(error instanceof Error ? error.message : "Unable to record this play.");
+    });
+  };
+  return <div className={`reel-media ${vertical ? "vertical" : ""} ${item.mediaType}`}>
+    {item.mediaType === "audio"
+      ? <audio src={item.videoUrl} controls preload="metadata" onPlay={trackPlay} aria-label={item.title} />
+      : <video ref={videoRef} src={item.videoUrl} poster={item.posterUrl || undefined} controls playsInline preload="metadata" muted={vertical} onPlay={trackPlay} aria-label={item.title} />}
+    {trackingError && <p className="reel-media-message" role="status">{trackingError}</p>}
+  </div>;
+}
+
+function ReelPage() {
+  const { user } = useContext(AuthContext);
+  const { navigate } = useRouter();
+  const [activeTab, setActiveTab] = useState<ReelCategory>("clips");
+  const [viewMode, setViewMode] = useState<"grid" | "vertical">(() => window.matchMedia("(max-width: 760px)").matches ? "vertical" : "grid");
+  const [actionError, setActionError] = useState("");
+  const state = useLoad<ReelItem[]>(`reel-items?category=${activeTab}`);
+  const activeCategory = reelCategories.find(({ id }) => id === activeTab)?.label ?? "Clips & trailers";
+  const engage = async (item: ReelItem, kind: "reaction" | "rating", value: string | number | null) => {
+    if (!user) { navigate("/account"); return; }
+    if (user.role !== "audience" || user.isDemo) {
+      setActionError("Sign in with a registered audience account to react or rate.");
+      return;
+    }
+    setActionError("");
+    try {
+      if (kind === "reaction" && value === item.myReaction) {
+        await api(`reel-items/${item.id}/reaction`, { method: "DELETE" });
+      } else if (value === null) {
+        await api(`reel-items/${item.id}/${kind}`, { method: "DELETE" });
+      } else {
+        await api(`reel-items/${item.id}/${kind}`, { method: "PUT", body: JSON.stringify({ [kind]: value }) });
+      }
+      state.reload();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Unable to save your response.");
+    }
+  };
+  return <PageFrame wide><section className="page-hero compact"><p className="eyebrow">THE REEL · BEYOND THE SCREEN</p><h1>African cinema,<br /><em>in conversation.</em></h1><p>Explore clips and trailers, filmmaker interviews, podcasts, and marketing stories from creators across the continent.</p></section>
+    <div className="reel-toolbar">
+      <div className="editorial-tabs" role="tablist" aria-label="Editorial categories">{reelCategories.map(({ id, label }) => <button role="tab" aria-selected={activeTab === id} className={activeTab === id ? "selected" : ""} key={id} onClick={() => setActiveTab(id)}>{label}</button>)}</div>
+      <div className="reel-view-toggle" role="group" aria-label="Reel layout">
+        <button className={viewMode === "grid" ? "selected" : ""} aria-pressed={viewMode === "grid"} onClick={() => setViewMode("grid")}><Grid2X2 size={15} />Grid</button>
+        <button className={viewMode === "vertical" ? "selected" : ""} aria-pressed={viewMode === "vertical"} onClick={() => setViewMode("vertical")}><Smartphone size={15} />Vertical</button>
+      </div>
+    </div>
+    <SectionHeading eyebrow="THE REEL" title={activeCategory} description={activeTab === "clips" ? "Creator-submitted film trailers, reviewed by the FilamuReel team." : "This section is ready for curated content. Published items will appear here."} />
+    {actionError && <Notice message={actionError} />}
+    {state.error && <Notice message={state.error} onRetry={state.reload} />}
+    {state.loading ? <Loading label="Loading Reel videos…" /> : state.data?.length ? <div className={`reel-feed ${viewMode}`}>
+      {state.data.map((item) => <article className="reel-card" key={item.id}>
+        <ReelMedia item={item} vertical={viewMode === "vertical"} />
+        <div className="reel-card-copy"><p className="eyebrow">{item.isFeatured ? "FEATURED · " : ""}{activeCategory.toUpperCase()}</p>
+          <h2>{item.title}</h2><p>{item.description || (item.filmTitle ? `A trailer for ${item.filmTitle}.` : `Shared by ${item.creatorName}.`)}</p>
+          {item.filmId && item.filmTitle && <Link href={`/film/${item.filmId}`} className="reel-film-link">Discover {item.filmTitle}<ArrowRight size={14} /></Link>}
+          <div className="reel-engagement"><div className="reel-reactions" aria-label="React to this video">{reelReactions.map(({ id, label, icon: Icon }) => <button key={id} className={item.myReaction === id ? "selected" : ""} aria-pressed={item.myReaction === id} aria-label={`${label} this video`} onClick={() => void engage(item, "reaction", id)}><Icon size={16} /></button>)}<span className="reel-reaction-count">{item.reactionCount} reactions</span></div>
+            <div className="reel-rating"><span>{item.averageRating === null ? "Rate this clip" : `${item.averageRating.toFixed(1)} · ${item.ratingCount} ratings`}</span>
+              <div>{[1, 2, 3, 4, 5].map((rating) => <button key={rating} className={(item.myRating || 0) >= rating ? "selected" : ""} aria-label={`Rate ${rating} out of 5`} aria-pressed={item.myRating === rating} onClick={() => void engage(item, "rating", item.myRating === rating ? null : rating)}><Star size={15} fill={(item.myRating || 0) >= rating ? "currentColor" : "none"} /></button>)}</div>
+            </div>
+          </div>
+        </div>
+      </article>)}
+    </div> : <div className="reel-empty panel"><span className="player-brand-mark"><FilmIcon size={19} /></span><h2>No published content here yet</h2><p>{activeTab === "clips" ? "Creators can submit a trailer from My Films or upload a standalone clip from Creator Studio. Approved videos appear here for audiences to watch, react to, and rate." : "Approved submissions in this section will appear here."}</p>{user?.role === "creator" && <Link href="/creator/reel" className="button button-outline">Upload to The Reel<ArrowRight size={15} /></Link>}</div>}
+  </PageFrame>;
+}
+
 function CreatorLayout({ children }: { children: ReactNode }) {
-  return <PageFrame wide><div className="creator-shell"><aside className="creator-sidebar"><p className="eyebrow">CREATOR STUDIO</p><nav><Link href="/creator"><LayoutDashboard size={16} />Overview</Link><Link href="/creator/films"><Clapperboard size={16} />My films</Link><Link href="/creator/upload"><Upload size={16} />New release</Link><Link href="/creator/analytics"><BarChart3 size={16} />Analytics</Link><Link href="/creator/earnings"><Wallet size={16} />Earnings</Link></nav><div className="creator-note"><FilmIcon size={17} /><span>Your stories.<br />Your audience.</span></div></aside><section className="creator-main">{children}</section></div></PageFrame>;
+  return <PageFrame wide><div className="creator-shell"><aside className="creator-sidebar"><p className="eyebrow">CREATOR STUDIO</p><nav><Link href="/creator"><LayoutDashboard size={16} />Overview</Link><Link href="/creator/films"><Clapperboard size={16} />My films</Link><Link href="/creator/reel"><Play size={16} />Reel uploads</Link><Link href="/creator/upload"><Upload size={16} />New release</Link><Link href="/creator/analytics"><BarChart3 size={16} />Analytics</Link><Link href="/creator/earnings"><Wallet size={16} />Earnings</Link></nav><div className="creator-note"><FilmIcon size={17} /><span>Your stories.<br />Your audience.</span></div></aside><section className="creator-main">{children}</section></div></PageFrame>;
 }
 
 function PageTitle({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) {
@@ -1125,17 +1319,126 @@ function CreatorDashboard() {
     </>}</CreatorLayout>;
 }
 
+function CreatorReel() {
+    const films = useLoad<Film[]>("creator/films");
+    const submissions = useLoad<{ id: number; filmId: number | null; category: ReelCategory; mediaType: "video" | "audio"; title: string; status: string; filmTitle: string | null; createdAt: string }[]>("creator/reel-submissions");
+    const [category, setCategory] = useState<ReelCategory>("clips");
+    const [mediaType, setMediaType] = useState<"video" | "audio">("video");
+    const [form, setForm] = useState({ title: "", description: "", videoUrl: "", posterUrl: "", filmId: "" });
+    const [uploading, setUploading] = useState<"videoUrl" | "posterUrl" | null>(null);
+    const [busy, setBusy] = useState(false);
+    const [notice, setNotice] = useState("");
+    const [error, setError] = useState("");
+    const categoryDescriptions: Record<ReelCategory, string> = {
+      clips: "Film clips, teasers, and trailers. You can link a published film or submit a standalone clip.",
+      interviews: "Filmmaker, cast, crew, or industry interviews.",
+      podcasts: "Upload a podcast as audio or video. Audio files are playable directly in The Reel.",
+      marketing: "Promotional films, campaign videos, and press content.",
+    };
+    const update = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }));
+    const uploadMedia = async (key: "videoUrl" | "posterUrl", file?: File) => {
+      if (!file) return;
+      const isPoster = key === "posterUrl";
+      const limit = (isPoster ? 10 : mediaType === "audio" ? 100 : 500) * 1024 * 1024;
+      if (file.size > limit) {
+        setError(`${isPoster ? "Poster images" : mediaType === "audio" ? "Audio files" : "Videos"} must be ${isPoster ? "10 MB" : mediaType === "audio" ? "100 MB" : "500 MB"} or smaller.`);
+        return;
+      }
+      setError("");
+      setUploading(key);
+      try {
+        const response = await fetch("/api/uploads", { method: "POST", headers: { "Content-Type": file.type }, body: file });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null) as { error?: string } | null;
+          throw new Error(payload?.error || `Upload failed (${response.status})`);
+        }
+        const result = await response.json() as { url: string };
+        update(key, result.url);
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "Unable to upload this media file.");
+      } finally {
+        setUploading(null);
+      }
+    };
+    const submit = async (event: FormEvent) => {
+      event.preventDefault();
+      setError("");
+      setNotice("");
+      setBusy(true);
+      try {
+        const payload = {
+          category, title: form.title, description: form.description,
+          videoUrl: form.videoUrl, mediaType, posterUrl: form.posterUrl,
+          ...(form.filmId ? { filmId: Number(form.filmId) } : {}),
+        };
+        await api("creator/reel-submissions", { method: "POST", body: JSON.stringify(payload) });
+        setNotice("Your Reel upload has been submitted for moderation.");
+        setForm({ title: "", description: "", videoUrl: "", posterUrl: "", filmId: "" });
+        submissions.reload();
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "Unable to submit this Reel upload.");
+      } finally {
+        setBusy(false);
+      }
+    };
+    const categoryLabel = (id: ReelCategory) => reelCategories.find((item) => item.id === id)?.label || id;
+    return <CreatorLayout>
+      <PageTitle eyebrow="CREATOR STUDIO · THE REEL" title="Upload to The Reel." description="Choose the section your content belongs in. Every submission is reviewed before it appears publicly." />
+      {notice && <div className="notice success" role="status">{notice}</div>}
+      {error && <Notice message={error} />}
+      {films.error && <Notice message={films.error} onRetry={films.reload} />}
+      <form className="panel reel-upload-form" onSubmit={(event) => void submit(event)}>
+        <label className="form-field"><span>Reel section</span><select value={category} onChange={(event) => { const next = event.target.value as ReelCategory; setCategory(next); setMediaType(next === "podcasts" ? "audio" : "video"); }}>{reelCategories.map(({ id, label }) => <option value={id} key={id}>{label}</option>)}</select></label>
+        <p className="reel-category-help">{categoryDescriptions[category]}</p>
+        <div className="form-grid">
+          {category === "podcasts" && <label className="form-field"><span>Podcast format</span><select value={mediaType} onChange={(event) => setMediaType(event.target.value as "video" | "audio")}><option value="audio">Audio</option><option value="video">Video</option></select></label>}
+          <label className="form-field full"><span>Title</span><input value={form.title} onChange={(event) => update("title", event.target.value)} required maxLength={200} placeholder={category === "podcasts" ? "Episode title" : category === "interviews" ? "Who or what is this interview about?" : "Give your video a title"} /></label>
+          <label className="form-field full"><span>Description</span><textarea value={form.description} onChange={(event) => update("description", event.target.value)} rows={3} maxLength={4000} placeholder="Add context for viewers." /></label>
+          <label className="form-field full"><span>{mediaType === "audio" ? "Audio URL" : "Video URL"}</span><input value={form.videoUrl} onChange={(event) => update("videoUrl", event.target.value)} required maxLength={2048} placeholder={`https://… or upload a ${mediaType} file below`} /></label>
+          <div className="reel-file-field"><label className="file-picker"><span><Upload size={14} />{uploading === "videoUrl" ? "Uploading…" : `Choose ${mediaType} file`}</span><input type="file" accept={mediaType === "audio" ? "audio/mpeg,audio/mp4,audio/wav,audio/ogg,audio/aac" : "video/mp4,video/webm,video/quicktime"} disabled={uploading !== null} onChange={(event) => { void uploadMedia("videoUrl", event.currentTarget.files?.[0]); event.currentTarget.value = ""; }} /></label><small>{mediaType === "audio" ? "MP3, M4A, WAV, OGG, AAC · max 100 MB" : "MP4, WebM, QuickTime · max 500 MB"}</small></div>
+          <label className="form-field full"><span>Thumbnail URL (optional)</span><input value={form.posterUrl} onChange={(event) => update("posterUrl", event.target.value)} maxLength={2048} placeholder="https://… or upload an image below" /></label>
+          <div className="reel-file-field"><label className="file-picker"><span><Upload size={14} />{uploading === "posterUrl" ? "Uploading…" : "Choose thumbnail"}</span><input type="file" accept="image/jpeg,image/png,image/webp" disabled={uploading !== null} onChange={(event) => { void uploadMedia("posterUrl", event.currentTarget.files?.[0]); event.currentTarget.value = ""; }} /></label><small>JPEG, PNG, WebP · max 10 MB</small></div>
+          <label className="form-field full"><span>Related film (optional)</span><select value={form.filmId} onChange={(event) => update("filmId", event.target.value)}><option value="">No related film — standalone Reel content</option>{films.data?.filter((film) => film.status === "published").map((film) => <option value={film.id} key={film.id}>{film.title}</option>)}</select></label>
+        </div>
+        <p className="reel-category-help">The section you select determines where this upload appears after approval. It will not be added to a film unless you link one above.</p>
+        <div className="form-actions"><button className="button button-gold" disabled={busy || uploading !== null}>{busy ? "Submitting…" : "Submit for review"}<ArrowRight size={15} /></button></div>
+      </form>
+      <section className="panel reel-submission-list"><div className="panel-heading"><div><p className="eyebrow">YOUR UPLOADS</p><h2>Submission status</h2></div><button className="text-button" onClick={submissions.reload}>Refresh</button></div>
+        {submissions.error && <Notice message={submissions.error} onRetry={submissions.reload} />}
+        {submissions.loading ? <Loading label="Loading your submissions…" /> : submissions.data?.length ? <div className="table-wrap"><table className="film-table"><thead><tr><th>Title</th><th>Section</th><th>Related film</th><th>Status</th><th>Submitted</th></tr></thead><tbody>
+          {submissions.data.map((item) => <tr key={item.id}><td>{item.title}</td><td>{categoryLabel(item.category)}</td><td>{item.filmTitle || "Standalone"}</td><td><span className={`status-pill reel-status-${item.status}`}>{item.status}</span></td><td>{new Date(item.createdAt).toLocaleDateString()}</td></tr>)}
+        </tbody></table></div> : <p className="muted panel-empty">You have no Reel uploads yet.</p>}
+      </section>
+    </CreatorLayout>;
+}
+
 function CreatorFilms() {
   const state = useLoad<Film[]>("creator/films");
+  const submissions = useLoad<{ id: number; filmId: number | null; category: ReelCategory; title: string; status: string; filmTitle: string | null }[]>("creator/reel-submissions");
   const [notice, setNotice] = useState("");
+  const submitTrailer = async (film: Film) => {
+    setNotice("");
+    try {
+      await api("creator/reel-submissions", { method: "POST", body: JSON.stringify({ filmId: film.id }) });
+      setNotice(`“${film.title}” trailer submitted for review.`);
+      submissions.reload();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to submit this trailer.");
+    }
+  };
   const remove = async (film: Film) => {
     if (!window.confirm(`Delete “${film.title}”? This cannot be undone.`)) return;
     try { await api(`films/${film.id}`, { method: "DELETE" }); state.reload(); }
     catch (error) { setNotice(error instanceof Error ? error.message : "Unable to delete film."); }
   };
   return <CreatorLayout><PageTitle eyebrow="YOUR PORTFOLIO" title="My films." description="Manage your releases and see how they are performing." action={<Link href="/creator/upload" className="button button-gold"><Plus size={16} />New release</Link>} />
-    {notice && <Notice message={notice} />}{state.error && <Notice message={state.error} onRetry={state.reload} />}
-    {state.loading ? <Loading /> : state.data?.length ? <div className="table-wrap"><table className="film-table"><thead><tr><th>Film</th><th>Status</th><th>Access</th><th>Views</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{state.data.map((film) => <tr key={film.id}><td><Link href={`/film/${film.id}`} className="table-film"><Poster film={film} /><span><strong>{film.title}</strong><small>{film.category || film.genre || "Film"}</small></span></Link></td><td><span className="status-pill">{film.status || "Published"}</span></td><td className="capitalize">{film.monetization.replaceAll("_", " ")}</td><td>{Number(film.viewCount || 0).toLocaleString()}</td><td><button className="text-button danger" onClick={() => void remove(film)}>Delete</button></td></tr>)}</tbody></table></div> : <EmptyState title="Your portfolio is empty" message="Bring your first story to FilamuReel and meet the people ready to see it." href="/creator/upload" action="Publish your first film" />}</CreatorLayout>;
+    {notice && <Notice message={notice} />}{state.error && <Notice message={state.error} onRetry={state.reload} />}{submissions.error && <Notice message={submissions.error} onRetry={submissions.reload} />}
+    {state.loading || submissions.loading ? <Loading /> : state.data?.length ? <div className="table-wrap"><table className="film-table"><thead><tr><th>Film</th><th>Status</th><th>Access</th><th>Views</th><th>The Reel</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{state.data.map((film) => {
+      const submission = submissions.data?.find((item) => item.filmId === film.id && item.category === "clips");
+      return <tr key={film.id}><td><Link href={`/film/${film.id}`} className="table-film"><Poster film={film} /><span><strong>{film.title}</strong><small>{film.category || film.genre || "Film"}</small></span></Link></td><td><span className="status-pill">{film.status || "Published"}</span></td><td className="capitalize">{film.monetization.replaceAll("_", " ")}</td><td>{Number(film.viewCount || 0).toLocaleString()}</td>
+        <td>{submission ? <>{submission.status === "rejected" && <button className="text-button" onClick={() => void submitTrailer(film)}>Resubmit</button>} <span className={`status-pill reel-status-${submission.status}`}>{submission.status}</span></> : film.trailerUrl ? <button className="text-button" disabled={film.status !== "published"} onClick={() => void submitTrailer(film)}>{film.status === "published" ? "Submit trailer" : "Publish first"}</button> : <span className="muted">Add a trailer first</span>}</td>
+        <td><button className="text-button danger" onClick={() => void remove(film)}>Delete</button></td></tr>;
+    })}</tbody></table></div> : <EmptyState title="Your portfolio is empty" message="Bring your first story to FilamuReel and meet the people ready to see it." href="/creator/upload" action="Publish your first film" />}</CreatorLayout>;
 }
 
 function UploadFilm() {

@@ -41,7 +41,7 @@ function publicUser(row) {
 }
 function publicRoute(path, method) {
   if (method === "GET" && (path === "/healthz" || path === "/films" || path === "/films/platform-stats" ||
-    path === "/categories" || path === "/plans" || ["/featured", "/films/featured", "/trending", "/films/trending",
+    path === "/categories" || path === "/plans" || path === "/reel-items" || ["/featured", "/films/featured", "/trending", "/films/trending",
       "/new-releases", "/films/new-releases", "/festival-winners", "/films/festival-winners",
       "/free-films", "/films/free"].includes(path)))
     return true;
@@ -322,7 +322,7 @@ function makeResponse(response) {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 export async function uploadedFileResponse(filename, directory = process.env.UPLOAD_DIR ?? "./uploads", rangeHeader = null) {
-  if (!/^[\da-f-]{36}\.(?:jpg|png|webp|mp4|webm|mov)$/.test(filename))
+  if (!/^[\da-f-]{36}\.(?:jpg|png|webp|mp4|webm|mov|mp3|m4a|wav|ogg|aac)$/.test(filename))
     return Response.json({ error: "File not found" }, { status: 404 });
   const file = Bun.file(join(directory, filename));
   if (!await file.exists())
@@ -334,7 +334,12 @@ export async function uploadedFileResponse(filename, directory = process.env.UPL
     webp: "image/webp",
     mp4: "video/mp4",
     webm: "video/webm",
-    mov: "video/quicktime"
+    mov: "video/quicktime",
+    mp3: "audio/mpeg",
+    m4a: "audio/mp4",
+    wav: "audio/wav",
+    ogg: "audio/ogg",
+    aac: "audio/aac"
   };
   const headers = new Headers({
     "Content-Type": contentTypes[extension],
@@ -359,6 +364,7 @@ export function createApiHandler(db, options = {}) {
   const uploadDirectory = options.uploadDirectory ?? process.env.UPLOAD_DIR ?? "./uploads";
   const maxImageBytes = options.maxImageBytes ?? 10 * 1024 * 1024;
   const maxVideoBytes = options.maxVideoBytes ?? 500 * 1024 * 1024;
+  const maxAudioBytes = options.maxAudioBytes ?? 100 * 1024 * 1024;
   const authAttempts = new Map();
   const checkAuthRate = (request, path) => {
     const operation = path === "/auth/login" ? "login" : "register";
@@ -468,6 +474,64 @@ export function createApiHandler(db, options = {}) {
         throw new HttpError(403, "Creator account required to publish films");
       const userId = asNumber(currentUser?.id);
       const creatorId = userId;
+      if (path === "/reel-items" && method === "GET") {
+        const category = url.searchParams.get("category");
+        if (category && !["clips", "interviews", "podcasts", "marketing"].includes(category))
+          throw new HttpError(400, "Invalid Reel category");
+        const rows = await dbRows(db, `SELECT r.id,r.film_id,r.creator_id,r.category,r.title,r.description,
+          r.video_url,r.media_type,r.poster_url,r.is_featured,r.created_at,f.title AS film_title,
+          u.name AS creator_name,
+          (SELECT COUNT(*) FROM reel_reactions x JOIN users xu ON xu.id=x.user_id
+            WHERE x.reel_item_id=r.id AND xu.is_demo=0) AS reaction_count,
+          (SELECT COUNT(*) FROM reel_ratings x JOIN users xu ON xu.id=x.user_id
+            WHERE x.reel_item_id=r.id AND xu.is_demo=0) AS rating_count,
+          (SELECT AVG(x.rating) FROM reel_ratings x JOIN users xu ON xu.id=x.user_id
+            WHERE x.reel_item_id=r.id AND xu.is_demo=0) AS average_rating,
+          (SELECT reaction FROM reel_reactions WHERE reel_item_id=r.id AND user_id=?) AS my_reaction,
+          (SELECT rating FROM reel_ratings WHERE reel_item_id=r.id AND user_id=?) AS my_rating
+          FROM reel_items r LEFT JOIN films f ON f.id=r.film_id JOIN users u ON u.id=r.creator_id
+          WHERE r.status='published' AND (r.film_id IS NULL OR f.status='published') AND (? IS NULL OR r.category=?)
+          ORDER BY r.is_featured DESC,r.created_at DESC LIMIT 100`,
+        [userId || null, userId || null, category, category]);
+        return makeResponse(json(rows.map((row) => ({
+          id: asNumber(row.id), filmId: row.film_id === null ? null : asNumber(row.film_id), creatorId: asNumber(row.creator_id),
+          category: String(row.category), title: String(row.title), description: asText(row.description),
+          videoUrl: String(row.video_url), mediaType: String(row.media_type), posterUrl: asText(row.poster_url), isFeatured: asBoolean(row.is_featured),
+          filmTitle: asText(row.film_title), creatorName: String(row.creator_name), createdAt: dateString(row.created_at),
+          reactionCount: asNumber(row.reaction_count), ratingCount: asNumber(row.rating_count),
+          averageRating: row.average_rating === null ? null : asNumber(row.average_rating),
+          myReaction: asText(row.my_reaction), myRating: row.my_rating === null ? null : asNumber(row.my_rating)
+        }))));
+      }
+      const reelEngagement = path.match(/^\/reel-items\/([1-9]\d*)\/(reaction|rating)$/);
+      if (reelEngagement && ["PUT", "DELETE"].includes(method)) {
+        if (!currentUser || currentUser.role !== "audience" || asBoolean(currentUser.is_demo))
+          throw new HttpError(403, "A registered audience account is required to engage with Reel content");
+        const reelItemId = requiredId(reelEngagement[1], "Reel item ID");
+        if (!await one(db, `SELECT r.id FROM reel_items r LEFT JOIN films f ON f.id=r.film_id
+          WHERE r.id=? AND r.status='published' AND (r.film_id IS NULL OR f.status='published')`, [reelItemId]))
+          throw new HttpError(404, "Reel item not found");
+        const kind = reelEngagement[2];
+        if (method === "DELETE") {
+          await db.unsafe(`DELETE FROM reel_${kind === "reaction" ? "reactions" : "ratings"} WHERE reel_item_id=? AND user_id=?`, [reelItemId, userId]);
+          return makeResponse(emptyResponse(204));
+        }
+        const body = await readBody(request);
+        const now = new Date().toISOString();
+        if (kind === "reaction") {
+          if (!["like", "love", "fire", "wow"].includes(body.reaction))
+            throw new HttpError(400, "Choose a valid reaction");
+          await db.unsafe(`INSERT INTO reel_reactions (reel_item_id,user_id,reaction,created_at,updated_at)
+            VALUES (?,?,?,?,?) ON CONFLICT(reel_item_id,user_id) DO UPDATE SET reaction=excluded.reaction,updated_at=excluded.updated_at`,
+          [reelItemId, userId, body.reaction, now, now]);
+          return makeResponse(json({ reelItemId, reaction: body.reaction }));
+        }
+        const rating = checkNumber(body.rating, "rating", { integer: true, min: 1, max: 5 });
+        await db.unsafe(`INSERT INTO reel_ratings (reel_item_id,user_id,rating,created_at,updated_at)
+          VALUES (?,?,?,?,?) ON CONFLICT(reel_item_id,user_id) DO UPDATE SET rating=excluded.rating,updated_at=excluded.updated_at`,
+        [reelItemId, userId, rating, now, now]);
+        return makeResponse(json({ reelItemId, rating }));
+      }
       if (path === "/account/subscription" && method === "GET") {
         const subscription = await one(db, `SELECT s.id,s.status,s.starts_at,s.ends_at,p.name AS plan_name,
           p.price_monthly,p.price_annual FROM subscriptions s JOIN plans p ON p.id=s.plan_id
@@ -603,6 +667,46 @@ export function createApiHandler(db, options = {}) {
         const rows = await dbRows(db, `${filmBaseSql} JOIN users owner ON owner.id=f.creator_id
           WHERE owner.is_demo=0 ORDER BY CASE f.status WHEN 'pending' THEN 0 ELSE 1 END,f.created_at DESC LIMIT 300`);
         return makeResponse(json(await filmsToApi(db, rows)));
+      }
+      if (path === "/admin/reel-items" && method === "GET") {
+        const rows = await dbRows(db, `SELECT r.id,r.film_id,r.category,r.title,r.description,r.video_url,r.media_type,r.poster_url,
+          r.status,r.is_featured,r.created_at,f.title AS film_title,u.name AS creator_name
+          FROM reel_items r LEFT JOIN films f ON f.id=r.film_id JOIN users u ON u.id=r.creator_id
+          ORDER BY CASE r.status WHEN 'pending' THEN 0 ELSE 1 END,r.created_at DESC LIMIT 300`);
+        return makeResponse(json(rows.map((row) => ({
+          id: asNumber(row.id), filmId: row.film_id === null ? null : asNumber(row.film_id), category: String(row.category),
+          mediaType: String(row.media_type),
+          title: String(row.title), description: asText(row.description), videoUrl: String(row.video_url),
+          mediaType: String(row.media_type), posterUrl: asText(row.poster_url), status: String(row.status), isFeatured: asBoolean(row.is_featured),
+          filmTitle: asText(row.film_title), creatorName: String(row.creator_name), createdAt: dateString(row.created_at)
+        }))));
+      }
+      const adminReelItem = path.match(/^\/admin\/reel-items\/([1-9]\d*)$/);
+      if (adminReelItem && method === "PATCH") {
+        const reelItemId = requiredId(adminReelItem[1], "Reel item ID");
+        const body = await readBody(request);
+        const updates = [];
+        const values = [];
+        if (body.status !== undefined) {
+          if (!["published", "hidden", "rejected"].includes(body.status))
+            throw new HttpError(400, "Reel status must be published, hidden, or rejected");
+          updates.push("status=?");
+          values.push(body.status);
+        }
+        const isFeatured = checkBoolean(body.isFeatured, "isFeatured");
+        if (isFeatured !== undefined) {
+          updates.push("is_featured=?");
+          values.push(Number(isFeatured));
+        }
+        if (!updates.length)
+          throw new HttpError(400, "Provide a status or featured flag");
+        updates.push("updated_at=?");
+        values.push(new Date().toISOString(), reelItemId);
+        const item = await one(db, `UPDATE reel_items SET ${updates.join(",")} WHERE id=? RETURNING id`, values);
+        if (!item)
+          throw new HttpError(404, "Reel item not found");
+        await recordAdminAction(userId, `reel_item.updated:${body.status ?? "editorial"}`, "reel_item", reelItemId);
+        return makeResponse(json({ id: reelItemId, updated: true }));
       }
       const adminFilm = path.match(/^\/admin\/films\/([1-9]\d*)$/);
       if (adminFilm && method === "PATCH") {
@@ -810,11 +914,16 @@ export function createApiHandler(db, options = {}) {
           "image/webp": { extension: "webp", limit: maxImageBytes, kind: "image" },
           "video/mp4": { extension: "mp4", limit: maxVideoBytes, kind: "video" },
           "video/webm": { extension: "webm", limit: maxVideoBytes, kind: "video" },
-          "video/quicktime": { extension: "mov", limit: maxVideoBytes, kind: "video" }
+          "video/quicktime": { extension: "mov", limit: maxVideoBytes, kind: "video" },
+          "audio/mpeg": { extension: "mp3", limit: maxAudioBytes, kind: "audio" },
+          "audio/mp4": { extension: "m4a", limit: maxAudioBytes, kind: "audio" },
+          "audio/wav": { extension: "wav", limit: maxAudioBytes, kind: "audio" },
+          "audio/ogg": { extension: "ogg", limit: maxAudioBytes, kind: "audio" },
+          "audio/aac": { extension: "aac", limit: maxAudioBytes, kind: "audio" }
         };
         const media = mediaTypes[contentType];
         if (!media)
-          throw new HttpError(415, "Upload a JPEG, PNG, WebP, MP4, WebM, or QuickTime file");
+          throw new HttpError(415, "Upload a JPEG, PNG, WebP, MP4, WebM, QuickTime, MP3, M4A, WAV, OGG, or AAC file");
         if (!request.body)
           throw new HttpError(400, "Upload body is empty");
         const declaredLength = request.headers.get("content-length");
@@ -823,7 +932,7 @@ export function createApiHandler(db, options = {}) {
           if (!Number.isSafeInteger(size) || size < 1)
             throw new HttpError(400, "Invalid upload size");
           if (size > media.limit)
-            throw new HttpError(413, `Upload exceeds the ${media.kind === "image" ? "10 MB image" : "500 MB video"} limit`);
+            throw new HttpError(413, `Upload exceeds the ${media.kind === "image" ? "10 MB image" : media.kind === "audio" ? "100 MB audio" : "500 MB video"} limit`);
         }
         const filename = `${randomUUID()}.${media.extension}`;
         const target = join(uploadDirectory, filename);
@@ -832,7 +941,7 @@ export function createApiHandler(db, options = {}) {
           transform(chunk, controller) {
             size += chunk.byteLength;
             if (size > media.limit) {
-              controller.error(new HttpError(413, `Upload exceeds the ${media.kind === "image" ? "10 MB image" : "500 MB video"} limit`));
+              controller.error(new HttpError(413, `Upload exceeds the ${media.kind === "image" ? "10 MB image" : media.kind === "audio" ? "100 MB audio" : "500 MB video"} limit`));
               return;
             }
             controller.enqueue(chunk);
@@ -1044,6 +1153,69 @@ export function createApiHandler(db, options = {}) {
       if (path === "/creator/films" && method === "GET") {
         const rows = await dbRows(db, `${filmBaseSql} WHERE f.creator_id=? ORDER BY f.created_at DESC`, [creatorId]);
         return makeResponse(json(await filmsToApi(db, rows)));
+      }
+      if (path === "/creator/reel-submissions" && method === "GET") {
+        const rows = await dbRows(db, `SELECT r.id,r.film_id,r.category,r.title,r.media_type,r.status,r.created_at,f.title AS film_title
+          FROM reel_items r LEFT JOIN films f ON f.id=r.film_id WHERE r.creator_id=? ORDER BY r.created_at DESC`, [creatorId]);
+        return makeResponse(json(rows.map((row) => ({
+          id: asNumber(row.id), filmId: row.film_id === null ? null : asNumber(row.film_id), category: String(row.category),
+          title: String(row.title), status: String(row.status), filmTitle: asText(row.film_title), createdAt: dateString(row.created_at)
+        }))));
+      }
+      if (path === "/creator/reel-submissions" && method === "POST") {
+        const body = await readBody(request);
+        const now = new Date().toISOString();
+        if (body.category === undefined && body.filmId !== undefined) {
+          const filmId = checkNumber(body.filmId, "filmId", { integer: true, min: 1 });
+          const film = await one(db, `SELECT id,title,description,trailer_url,poster_url,status FROM films
+            WHERE id=? AND creator_id=?`, [filmId, creatorId]);
+          if (!film)
+            throw new HttpError(404, "Film not found in your portfolio");
+          if (film.status !== "published")
+            throw new HttpError(409, "Publish the film before submitting its trailer to The Reel");
+          if (!film.trailer_url)
+            throw new HttpError(400, "Add a trailer URL or upload a trailer before submitting");
+          const existing = await one(db, "SELECT id,status FROM reel_items WHERE film_id=? AND category='clips' ORDER BY id LIMIT 1", [filmId]);
+          if (existing && existing.status !== "rejected")
+            throw new HttpError(409, "This film already has a Reel trailer submission");
+          const item = existing
+            ? await one(db, `UPDATE reel_items SET title=?,description=?,video_url=?,poster_url=?,status='pending',updated_at=?
+              WHERE id=? RETURNING id`, [
+              `${String(film.title)} — Trailer`, asText(film.description), String(film.trailer_url),
+              asText(film.poster_url), now, existing.id
+            ])
+            : await one(db, `INSERT INTO reel_items (film_id,creator_id,category,title,description,video_url,poster_url,status,created_at,updated_at)
+              VALUES (?,?,'clips',?,?,?,?,'pending',?,?) RETURNING id`, [
+              filmId, creatorId, `${String(film.title)} — Trailer`, asText(film.description),
+              String(film.trailer_url), asText(film.poster_url), now, now
+            ]);
+          return makeResponse(json({ id: asNumber(item?.id), status: "pending" }, existing ? 200 : 201));
+        }
+        const category = checkString(body.category, "category", { required: true, max: 30 });
+        if (!["clips", "interviews", "podcasts", "marketing"].includes(category))
+          throw new HttpError(400, "Choose a valid Reel section");
+        const title = checkString(body.title, "title", { required: true, max: 200 });
+        const description = checkString(body.description, "description", { max: 4000 });
+        const videoUrl = checkString(body.videoUrl, "videoUrl", { required: true, max: 2048 });
+        const posterUrl = checkString(body.posterUrl, "posterUrl", { max: 2048 });
+        const mediaType = body.mediaType ?? "video";
+        if (!["video", "audio"].includes(mediaType) || (mediaType === "audio" && category !== "podcasts"))
+          throw new HttpError(400, "Audio uploads are only supported in Podcasts; choose video for other sections");
+        let film = null;
+        if (body.filmId !== undefined && body.filmId !== null && body.filmId !== "") {
+          const filmId = checkNumber(body.filmId, "filmId", { integer: true, min: 1 });
+          film = await one(db, "SELECT id,status FROM films WHERE id=? AND creator_id=?", [filmId, creatorId]);
+          if (!film)
+            throw new HttpError(404, "Film not found in your portfolio");
+          if (film.status !== "published")
+            throw new HttpError(409, "Only published films can be linked to a Reel submission");
+        }
+        const item = await one(db, `INSERT INTO reel_items
+          (film_id,creator_id,category,title,description,video_url,media_type,poster_url,status,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,'pending',?,?) RETURNING id`, [
+          film?.id ?? null, creatorId, category, title, description ?? null, videoUrl, mediaType, posterUrl ?? null, now, now
+        ]);
+        return makeResponse(json({ id: asNumber(item?.id), status: "pending" }, 201));
       }
       if (path === "/creator/dashboard" && method === "GET") {
         const rows = await dbRows(db, `${filmBaseSql} WHERE f.creator_id=?`, [creatorId]);
