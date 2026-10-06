@@ -11,6 +11,7 @@ const asset = (file, contentType, cacheControl = "public, max-age=3600") => () =
   { headers: { "Content-Type": contentType, "Cache-Control": cacheControl } }
 );
 const server = Bun.serve({
+  hostname: process.env.HOST || "0.0.0.0",
   port: Number(process.env.PORT || 3000),
   routes: {
     "/api/*": api,

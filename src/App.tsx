@@ -264,12 +264,15 @@ function FilmCard({ film, landscape = false }: { film: Film; landscape?: boolean
 }
 
 function FilmRail({ title, eyebrow, films }: { title: string; eyebrow?: string; films: Film[] }) {
-  const [offset, setOffset] = useState(0);
+  const railRef = useRef<HTMLDivElement>(null);
   if (!films.length) return null;
-  const move = (step: number) => setOffset((current) => Math.min(Math.max(current + step, 0), Math.max(0, films.length - 4)));
+  const move = (step: number) => {
+    const rail = railRef.current;
+    if (rail) rail.scrollBy({ left: step * rail.clientWidth * 0.8, behavior: "smooth" });
+  };
   return <section className="film-rail">
     <SectionHeading eyebrow={eyebrow} title={title} action={<div className="rail-controls"><button className="icon-button" aria-label="Scroll left" onClick={() => move(-3)}><ChevronLeft size={18} /></button><button className="icon-button" aria-label="Scroll right" onClick={() => move(3)}><ChevronRight size={18} /></button></div>} />
-    <div className="rail-window"><div className="rail-track" style={{ transform: `translateX(calc(${offset} * (var(--card-width) + var(--rail-gap)) * -1))` }}>{films.map((film) => <FilmCard key={film.id} film={film} />)}</div></div>
+    <div className="rail-window" ref={railRef}><div className="rail-track">{films.map((film) => <FilmCard key={film.id} film={film} />)}</div></div>
   </section>;
 }
 
@@ -471,6 +474,7 @@ function VideoPlayer({ film, initialPosition, onClose, onSaveError }: {
       const fullscreen = document.fullscreenElement === playerRef.current;
       setIsFullscreen(fullscreen);
       setControlsVisible(true);
+      if (!fullscreen) screen.orientation?.unlock();
     };
     document.addEventListener("fullscreenchange", syncFullscreen);
     return () => document.removeEventListener("fullscreenchange", syncFullscreen);
@@ -558,8 +562,16 @@ function VideoPlayer({ film, initialPosition, onClose, onSaveError }: {
   const toggleFullscreen = () => {
     if (document.fullscreenElement) {
       void document.exitFullscreen();
+      screen.orientation?.unlock();
     } else if (playerRef.current) {
-      void playerRef.current.requestFullscreen();
+      void playerRef.current.requestFullscreen().then(() => {
+        if (screen.orientation?.lock)
+          void screen.orientation.lock("landscape").catch((error: unknown) => {
+            console.warn("The browser did not allow landscape orientation lock.", error);
+          });
+      }).catch((error: unknown) => {
+        setPlayerError(error instanceof Error ? error.message : "Fullscreen is unavailable in this browser.");
+      });
     }
   };
 
@@ -607,7 +619,11 @@ function VideoPlayer({ film, initialPosition, onClose, onSaveError }: {
         src={source}
         aria-label={film.title}
         onClick={() => {
-          if (!loading && !buffering && !playerError) togglePlayback();
+          if (isFullscreen && playing) {
+            setControlsVisible(true);
+          } else if (!loading && !buffering && !playerError) {
+            togglePlayback();
+          }
         }}
         onLoadedMetadata={(event) => {
           const video = event.currentTarget;

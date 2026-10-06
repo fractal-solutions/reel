@@ -13,7 +13,13 @@ bun install
 bun dev
 ```
 
-The server prints its local URL on startup. SQLite is initialized automatically on first run. Set `PORT` to use another port (default `3000`).
+The server starts the app and its API together. SQLite is initialized automatically on first run. Set `PORT` to use another port (default `3000`), or `HOST` to change the network interface it listens on (default `0.0.0.0`).
+
+### Open the development app on a phone
+
+Run `bun dev` on the computer hosting the project, then open `http://<computer-LAN-IP>:3000` on a phone connected to the same network. For example, use `http://192.168.1.20:3000` if that is the computer's local IP. Allow Bun through the computer's firewall if the phone cannot connect.
+
+Do not serve `dist/` with a static file server such as `bunx serve` when you need the working app. `bun run build` creates browser assets only; it does not include the SQLite database or `/api/*` backend routes, so data requests return 404. Run the integrated Bun app server (`bun dev` for local development, or `bun start` for production) instead. The frontend calls `/api/*` on the same host and port that serves the app.
 
 Local development seeds demo accounts:
 
@@ -31,6 +37,8 @@ These credentials and seeded accounts are for local demos only. Never deploy the
 bun run build
 bun start
 ```
+
+`bun start` runs the integrated app and API server; it is not a static server for the generated `dist/` directory. Production startup requires `ADMIN_PASSWORD` with at least 12 characters (see **Accounts and roles**). Binding to `0.0.0.0` makes the server reachable from other devices on the LAN; restrict network access with the host firewall and do not expose a demo or development instance to an untrusted network.
 
 ## Install as an app
 
