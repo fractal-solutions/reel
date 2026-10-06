@@ -88,6 +88,7 @@ export function App() {
   const [path, setPath] = useState(() => `${window.location.pathname}${window.location.search}`);
   const [user, setUser] = useState<AccountUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const pwaInstall = usePwaInstall();
   const refreshAuth = async () => {
     const result = await api<{ user: AccountUser | null }>("auth/me");
     setUser(result.user);
@@ -137,12 +138,12 @@ export function App() {
 
   return <RouterContext.Provider value={{ path, navigate }}>
     <AuthContext.Provider value={{ user, loading: authLoading, refresh: refreshAuth, signOut }}>
-    <div className="app-shell"><Header />{page}<Footer /><PwaInstallPrompt /></div>
+    <div className="app-shell"><Header pwaInstall={pwaInstall} />{page}<Footer /><PwaInstallPrompt pwaInstall={pwaInstall} /></div>
     </AuthContext.Provider>
   </RouterContext.Provider>;
 }
 
-function Header() {
+function Header({ pwaInstall }: { pwaInstall: PwaInstallState }) {
   const { path } = useRouter();
   const { user, signOut } = useContext(AuthContext);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -158,6 +159,7 @@ function Header() {
       <Link href="/" className="brand"><span className="brand-mark"><FilmIcon size={19} /></span><span>Filamu<span className="brand-accent">Reel</span></span></Link>
       <nav className={`main-nav ${menuOpen ? "nav-open" : ""}`}>
         {nav.map(({ to, label, icon: Icon }) => <Link key={to} href={to} className={`nav-link ${path.split("?")[0] === to ? "active" : ""}`} onClick={() => setMenuOpen(false)}><Icon size={16} />{label}</Link>)}
+        {menuOpen && pwaInstall.showOptions && <InstallCard pwaInstall={pwaInstall} compact />}
       </nav>
       <div className="nav-actions">
         {!creator && !admin && <Link href="/plans" className="button button-outline button-small"><Ticket size={15} /> Membership</Link>}
@@ -175,37 +177,66 @@ function Footer() {
   return <footer className="site-footer"><Link href="/" className="brand"><span className="brand-mark"><FilmIcon size={17} /></span><span>Filamu<span className="brand-accent">Reel</span></span></Link><p>A home for stories born across Africa.</p><span className="footer-copy">© {new Date().getFullYear()} FilamuReel</span></footer>;
 }
 
-function PwaInstallPrompt() {
+type PwaInstallState = {
+  installPrompt: BrowserInstallPrompt | null;
+  showOptions: boolean;
+  showBanner: boolean;
+  iosInstall: boolean;
+  installed: boolean;
+  install: () => Promise<void>;
+  dismiss: () => void;
+};
+
+function usePwaInstall(): PwaInstallState {
   const [installPrompt, setInstallPrompt] = useState<BrowserInstallPrompt | null>(null);
+  const [showOptions, setShowOptions] = useState(false);
   const [showBanner, setShowBanner] = useState(false);
   const [iosInstall, setIosInstall] = useState(false);
+  const [installed, setInstalled] = useState(false);
   useEffect(() => {
-    const installed = window.matchMedia("(display-mode: standalone)").matches ||
+    const displayMode = window.matchMedia("(display-mode: standalone)");
+    const alreadyInstalled = displayMode.matches ||
       Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
     const dismissed = localStorage.getItem("filamureel-install-dismissed-v1") === "true";
-    if (installed || dismissed) return;
+    if (alreadyInstalled) {
+      setInstalled(true);
+      return;
+    }
     const isIos = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
       (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
     let timer: number | undefined;
     const onBeforeInstallPrompt = (event: Event) => {
       event.preventDefault();
       setInstallPrompt(event as BrowserInstallPrompt);
-      timer = window.setTimeout(() => setShowBanner(true), 7000);
+      timer = window.setTimeout(() => {
+        setShowOptions(true);
+        if (!dismissed) setShowBanner(true);
+      }, 7000);
     };
     const onAppInstalled = () => {
+      setInstalled(true);
+      setShowOptions(false);
       setShowBanner(false);
       setInstallPrompt(null);
     };
     if (isIos) {
       setIosInstall(true);
-      timer = window.setTimeout(() => setShowBanner(true), 7000);
+      timer = window.setTimeout(() => {
+        setShowOptions(true);
+        if (!dismissed) setShowBanner(true);
+      }, 7000);
     }
+    const onDisplayModeChange = (event: MediaQueryListEvent) => {
+      if (event.matches) onAppInstalled();
+    };
     window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt);
     window.addEventListener("appinstalled", onAppInstalled);
+    displayMode.addEventListener("change", onDisplayModeChange);
     return () => {
       if (timer !== undefined) window.clearTimeout(timer);
       window.removeEventListener("beforeinstallprompt", onBeforeInstallPrompt);
       window.removeEventListener("appinstalled", onAppInstalled);
+      displayMode.removeEventListener("change", onDisplayModeChange);
     };
   }, []);
   const dismiss = () => {
@@ -217,15 +248,33 @@ function PwaInstallPrompt() {
     await installPrompt.prompt();
     const choice = await installPrompt.userChoice;
     setInstallPrompt(null);
-    if (choice.outcome === "accepted") setShowBanner(false);
+    if (choice.outcome === "accepted") {
+      setShowBanner(false);
+      setShowOptions(false);
+    }
   };
-  if (!showBanner || (!installPrompt && !iosInstall)) return null;
+  return { installPrompt, showOptions, showBanner: showBanner && !installed, iosInstall, installed, install, dismiss };
+}
+
+function InstallCard({ pwaInstall, compact = false }: { pwaInstall: PwaInstallState; compact?: boolean }) {
+  return <aside className={`pwa-install-card ${compact ? "compact" : ""}`} aria-label="Install FilamuReel">
+    <div className="pwa-install-card-brand"><img src="/icons/reel.svg" alt="" width="38" height="38" /><span><strong>Take Reel with you</strong><small>Install FilamuReel for quick access.</small></span></div>
+    {pwaInstall.installPrompt
+      ? <button className="button button-gold pwa-install-action" onClick={() => void pwaInstall.install()}><Download size={15} />Install app</button>
+      : pwaInstall.iosInstall
+        ? <div className="pwa-ios-steps"><span>1</span><Share2 size={15} /><strong>Share</strong><ArrowRight size={13} /><span>2</span><strong>Add to Home Screen</strong></div>
+        : <p className="pwa-install-manual">Choose <strong>Install app</strong> or <strong>Add to Home Screen</strong> from your browser menu.</p>}
+  </aside>;
+}
+
+function PwaInstallPrompt({ pwaInstall }: { pwaInstall: PwaInstallState }) {
+  if (!pwaInstall.showBanner || (!pwaInstall.installPrompt && !pwaInstall.iosInstall)) return null;
   return <aside className="pwa-install-banner" aria-label="Install FilamuReel">
-    <div className="pwa-install-topline"><span className="pwa-install-icon"><img src="/icons/reel.svg" alt="" width="52" height="52" /></span><span className="eyebrow">FILAMUREEL · YOUR CINEMA</span><button className="pwa-install-dismiss" onClick={dismiss} aria-label="Dismiss install prompt"><X size={17} /></button></div>
-    <div className="pwa-install-copy"><strong>Your cinema,<br />one tap away.</strong><span>{iosInstall && !installPrompt ? "Add FilamuReel to your Home Screen for a focused, app-like experience." : "Install FilamuReel for quick access to stories from across Africa."}</span></div>
-    {installPrompt
-      ? <button className="button button-gold pwa-install-action" onClick={() => void install()}><Download size={15} />Install FilamuReel</button>
-      : iosInstall && <div className="pwa-ios-steps"><span>1</span><Share2 size={15} /><strong>Share</strong><ArrowRight size={13} /><span>2</span><strong>Add to Home Screen</strong></div>}
+    <div className="pwa-install-topline"><span className="pwa-install-icon"><img src="/icons/reel.svg" alt="" width="52" height="52" /></span><span className="eyebrow">FILAMUREEL · YOUR CINEMA</span><button className="pwa-install-dismiss" onClick={pwaInstall.dismiss} aria-label="Dismiss install prompt"><X size={17} /></button></div>
+    <div className="pwa-install-copy"><strong>Your cinema,<br />one tap away.</strong><span>{pwaInstall.iosInstall && !pwaInstall.installPrompt ? "Add FilamuReel to your Home Screen for a focused, app-like experience." : "Install FilamuReel for quick access to stories from across Africa."}</span></div>
+    {pwaInstall.installPrompt
+      ? <button className="button button-gold pwa-install-action" onClick={() => void pwaInstall.install()}><Download size={15} />Install FilamuReel</button>
+      : pwaInstall.iosInstall && <div className="pwa-ios-steps"><span>1</span><Share2 size={15} /><strong>Share</strong><ArrowRight size={13} /><span>2</span><strong>Add to Home Screen</strong></div>}
   </aside>;
 }
 
