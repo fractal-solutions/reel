@@ -402,12 +402,17 @@ h1, h2, h3 { font-family: var(--serif); font-weight: 500; letter-spacing: -0.035
 .upload-review dt { color: #788278; font: 9px/1.5 var(--sans); }
 .upload-review dd { overflow-wrap: anywhere; margin: 0; color: #d3d6cb; font: 10px/1.5 var(--sans); }
 @media (max-width: 600px) {
-  .creator-wizard-steps { margin-bottom: 21px; }
-  .creator-wizard-steps li > small { font-size: 8px; }
-  .creator-wizard-steps li > span { width: 27px; height: 27px; }
-  .creator-wizard-steps li:not(:last-child)::after { top: 13px; }
+  .creator-upload-wizard > .creator-wizard-steps { display: flex; flex-direction: row; align-items: flex-start; width: 100%; margin-bottom: 21px; }
+  .creator-upload-wizard > .creator-wizard-steps > li { display: flex; flex: 1 1 0; flex-direction: column; align-items: center; justify-content: flex-start; gap: 6px; min-width: 0; }
+  .creator-upload-wizard > .creator-wizard-steps > li > span { width: 27px; height: 27px; flex: 0 0 27px; }
+  .creator-upload-wizard > .creator-wizard-steps > li > small { display: block; width: 100%; max-width: 100%; overflow: visible; font-size: 8px; line-height: 1.25; text-align: center; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }
+  .creator-upload-wizard > .creator-wizard-steps > li:not(:last-child)::after { top: 13px; left: calc(50% + 17px); width: calc(100% - 34px); }
   .upload-file-details { align-items: flex-start; flex-direction: column; gap: 3px; }
   .upload-review dl { grid-template-columns: 1fr; }
+  .main-nav .pwa-install-card-brand { display: flex; align-items: center; }
+  .main-nav .pwa-install-card-brand > span { display: flex; flex: 1 1 auto; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; }
+  .main-nav .pwa-install-card-brand strong,
+  .main-nav .pwa-install-card-brand small { display: block; width: 100%; }
 }
 .region-list { display: grid; }
 .region-row { display: grid; grid-template-columns: 28px 1fr auto; gap: 7px; align-items: center; padding: 12px 0; border-bottom: 1px solid rgba(235,232,218,.06); color: #bfc4bb; font-size: 10px; }
@@ -551,7 +556,7 @@ h1, h2, h3 { font-family: var(--serif); font-weight: 500; letter-spacing: -0.035
   .reel-rating { justify-content: start; }
   .editorial-feature { grid-column: auto; display: block; }
   .editorial-feature .editorial-image { min-height: 230px; }
-  .creator-shell { display: flex; flex-direction: column; gap: 20px; padding-top: 0; }
+  .creator-shell { display: flex; flex-direction: column; gap: 20px; padding-top: 18px; }
   .creator-sidebar { position: static; padding: 11px; }
   .creator-sidebar .eyebrow, .creator-note { display: none; }
   .creator-sidebar nav { display: flex; overflow-x: auto; }
