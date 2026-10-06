@@ -30,14 +30,15 @@ function clearSessionCookie(response) {
 function isSameOriginRequest(request, requestUrl) {
   const origin = request.headers.get("origin");
   if (!origin) return true;
-  const host = request.headers.get("host");
+  const forwardedHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+  const host = forwardedHost || request.headers.get("host");
   if (!host) return false;
   try {
     const originUrl = new URL(origin);
     const forwardedProtocol = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
     const protocol = forwardedProtocol ? `${forwardedProtocol}:` : requestUrl.protocol;
     return ["http:", "https:"].includes(originUrl.protocol) &&
-      originUrl.host.toLowerCase() === host.toLowerCase() &&
+      originUrl.host.toLowerCase() === new URL(`${protocol}//${host}`).host.toLowerCase() &&
       originUrl.protocol === protocol;
   } catch {
     return false;

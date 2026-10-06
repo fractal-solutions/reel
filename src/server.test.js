@@ -79,6 +79,18 @@ describe("Reel Africa API", () => {
     expect((await call("/auth/logout", "POST", undefined, null, {
       Host: "192.168.100.81:3000", Origin: "http://attacker.example"
     })).status).toBe(403);
+    expect((await call("/auth/logout", "POST", undefined, null, {
+      Host: "127.0.0.1:3000",
+      Origin: "https://filamureel.christotech.co.ke",
+      "X-Forwarded-Host": "filamureel.christotech.co.ke",
+      "X-Forwarded-Proto": "https"
+    })).status).toBe(204);
+    expect((await call("/auth/logout", "POST", undefined, null, {
+      Host: "127.0.0.1:3000",
+      Origin: "https://attacker.example",
+      "X-Forwarded-Host": "filamureel.christotech.co.ke",
+      "X-Forwarded-Proto": "https"
+    })).status).toBe(403);
     const logoutCookie = await cookieFrom(await call("/auth/register", "POST", {
       name: "Logout Test", email: "logout@example.test", password: "LogoutPassword123!", role: "audience"
     }, null));
